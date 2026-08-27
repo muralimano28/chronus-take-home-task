@@ -1,0 +1,104 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Organization {
+  id          String             @id @default(uuid()) @db.Uuid
+  name        String
+
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  users       OrganizationUser[]
+  mentorSlots MentorSlot[]
+  bookings    Booking[]
+}
+
+model User {
+  id            String             @id @default(uuid()) @db.Uuid
+  email         String             @unique
+  name          String
+
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  organizations OrganizationUser[]
+}
+
+model OrganizationUser {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  userId         String       @db.Uuid
+  timezone       String       @db.VarChar(50)
+  isMentor       Boolean      @default(false)
+
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: NoAction)
+  mentorSlots    MentorSlot[]
+  bookings       Booking[]
+
+  // In the below line, id refers to the id of the OrganizationUser model. As it is unique, [organizationId, id] will also be unique.
+  // But PostgreSQL requires the columns referenced by a foreign key to have a unique constraint/index matching the referenced column set.
+  // When composite foreign key says, REFERENCES OrganizationUser(organizationId, id)
+  // It means the referenced table must have a unique constraint/index on (organizationId, id).
+  @@unique([organizationId, id])
+  @@unique([organizationId, userId])
+}
+
+enum SlotStatus {
+  AVAILABLE
+  BOOKED
+}
+
+model MentorSlot {
+  id             String     @id @default(uuid()) @db.Uuid
+  organizationId String     @db.Uuid
+  mentorId       String     @db.Uuid
+  startTime      DateTime   @db.Timestamptz(3)
+  endTime        DateTime   @db.Timestamptz(3)
+  status         SlotStatus @default(AVAILABLE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  mentor         OrganizationUser @relation(fields: [organizationId, mentorId], references: [organizationId, id], onDelete: NoAction)
+  bookings       Booking[]        @relation("BookingSlot")
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, mentorId, startTime, endTime]) // This does not prevent overlapping slots
+}
+
+enum BookingStatus {
+  ACTIVE
+  CANCELLED
+}
+
+model Booking {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  memberID       String        @db.Uuid
+  slotId         String        @db.Uuid
+  status         BookingStatus @default(ACTIVE)
+  idempotencyKey String        @db.VarChar(100)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  member         OrganizationUser @relation(fields: [organizationId, memberID], references: [organizationId, id], onDelete: NoAction)
+  slot           MentorSlot       @relation("BookingSlot", fields: [organizationId, slotId], references: [organizationId, id], onDelete: NoAction)
+
+  @@unique([slotId], where: { status: "ACTIVE" }) // This restricts only 1 active booking for a slot
+  @@unique([organizationId, memberID, idempotencyKey]) // This ensures that idempotency key is unique for each organization and member
+}
+
