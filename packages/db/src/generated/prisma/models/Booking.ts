@@ -33,6 +33,7 @@ export type BookingMinAggregateOutputType = {
   idempotencyKey: string | null
   createdAt: Date | null
   updatedAt: Date | null
+  cancelledAt: Date | null
 }
 
 export type BookingMaxAggregateOutputType = {
@@ -44,6 +45,7 @@ export type BookingMaxAggregateOutputType = {
   idempotencyKey: string | null
   createdAt: Date | null
   updatedAt: Date | null
+  cancelledAt: Date | null
 }
 
 export type BookingCountAggregateOutputType = {
@@ -55,6 +57,7 @@ export type BookingCountAggregateOutputType = {
   idempotencyKey: number
   createdAt: number
   updatedAt: number
+  cancelledAt: number
   _all: number
 }
 
@@ -68,6 +71,7 @@ export type BookingMinAggregateInputType = {
   idempotencyKey?: true
   createdAt?: true
   updatedAt?: true
+  cancelledAt?: true
 }
 
 export type BookingMaxAggregateInputType = {
@@ -79,6 +83,7 @@ export type BookingMaxAggregateInputType = {
   idempotencyKey?: true
   createdAt?: true
   updatedAt?: true
+  cancelledAt?: true
 }
 
 export type BookingCountAggregateInputType = {
@@ -90,6 +95,7 @@ export type BookingCountAggregateInputType = {
   idempotencyKey?: true
   createdAt?: true
   updatedAt?: true
+  cancelledAt?: true
   _all?: true
 }
 
@@ -174,6 +180,7 @@ export type BookingGroupByOutputType = {
   idempotencyKey: string
   createdAt: Date
   updatedAt: Date
+  cancelledAt: Date | null
   _count: BookingCountAggregateOutputType | null
   _min: BookingMinAggregateOutputType | null
   _max: BookingMaxAggregateOutputType | null
@@ -206,6 +213,7 @@ export type BookingWhereInput = {
   idempotencyKey?: Prisma.StringFilter<"Booking"> | string
   createdAt?: Prisma.DateTimeFilter<"Booking"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Booking"> | Date | string
+  cancelledAt?: Prisma.DateTimeNullableFilter<"Booking"> | Date | string | null
   organization?: Prisma.XOR<Prisma.OrganizationScalarRelationFilter, Prisma.OrganizationWhereInput>
   member?: Prisma.XOR<Prisma.OrganizationUserScalarRelationFilter, Prisma.OrganizationUserWhereInput>
   slot?: Prisma.XOR<Prisma.MentorSlotScalarRelationFilter, Prisma.MentorSlotWhereInput>
@@ -220,6 +228,7 @@ export type BookingOrderByWithRelationInput = {
   idempotencyKey?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
+  cancelledAt?: Prisma.SortOrderInput | Prisma.SortOrder
   organization?: Prisma.OrganizationOrderByWithRelationInput
   member?: Prisma.OrganizationUserOrderByWithRelationInput
   slot?: Prisma.MentorSlotOrderByWithRelationInput
@@ -238,6 +247,7 @@ export type BookingWhereUniqueInput = Prisma.AtLeast<{
   idempotencyKey?: Prisma.StringFilter<"Booking"> | string
   createdAt?: Prisma.DateTimeFilter<"Booking"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Booking"> | Date | string
+  cancelledAt?: Prisma.DateTimeNullableFilter<"Booking"> | Date | string | null
   organization?: Prisma.XOR<Prisma.OrganizationScalarRelationFilter, Prisma.OrganizationWhereInput>
   member?: Prisma.XOR<Prisma.OrganizationUserScalarRelationFilter, Prisma.OrganizationUserWhereInput>
   slot?: Prisma.XOR<Prisma.MentorSlotScalarRelationFilter, Prisma.MentorSlotWhereInput>
@@ -252,6 +262,7 @@ export type BookingOrderByWithAggregationInput = {
   idempotencyKey?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
+  cancelledAt?: Prisma.SortOrderInput | Prisma.SortOrder
   _count?: Prisma.BookingCountOrderByAggregateInput
   _max?: Prisma.BookingMaxOrderByAggregateInput
   _min?: Prisma.BookingMinOrderByAggregateInput
@@ -269,6 +280,7 @@ export type BookingScalarWhereWithAggregatesInput = {
   idempotencyKey?: Prisma.StringWithAggregatesFilter<"Booking"> | string
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"Booking"> | Date | string
   updatedAt?: Prisma.DateTimeWithAggregatesFilter<"Booking"> | Date | string
+  cancelledAt?: Prisma.DateTimeNullableWithAggregatesFilter<"Booking"> | Date | string | null
 }
 
 export type BookingCreateInput = {
@@ -277,6 +289,7 @@ export type BookingCreateInput = {
   idempotencyKey: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  cancelledAt?: Date | string | null
   organization: Prisma.OrganizationCreateNestedOneWithoutBookingsInput
   member: Prisma.OrganizationUserCreateNestedOneWithoutBookingsInput
   slot: Prisma.MentorSlotCreateNestedOneWithoutBookingsInput
@@ -291,6 +304,7 @@ export type BookingUncheckedCreateInput = {
   idempotencyKey: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  cancelledAt?: Date | string | null
 }
 
 export type BookingUpdateInput = {
@@ -299,6 +313,7 @@ export type BookingUpdateInput = {
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  cancelledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   organization?: Prisma.OrganizationUpdateOneRequiredWithoutBookingsNestedInput
   member?: Prisma.OrganizationUserUpdateOneRequiredWithoutBookingsNestedInput
   slot?: Prisma.MentorSlotUpdateOneRequiredWithoutBookingsNestedInput
@@ -313,6 +328,7 @@ export type BookingUncheckedUpdateInput = {
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  cancelledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type BookingCreateManyInput = {
@@ -324,6 +340,7 @@ export type BookingCreateManyInput = {
   idempotencyKey: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  cancelledAt?: Date | string | null
 }
 
 export type BookingUpdateManyMutationInput = {
@@ -332,6 +349,7 @@ export type BookingUpdateManyMutationInput = {
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  cancelledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type BookingUncheckedUpdateManyInput = {
@@ -343,6 +361,7 @@ export type BookingUncheckedUpdateManyInput = {
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  cancelledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type BookingListRelationFilter = {
@@ -370,6 +389,7 @@ export type BookingCountOrderByAggregateInput = {
   idempotencyKey?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
+  cancelledAt?: Prisma.SortOrder
 }
 
 export type BookingMaxOrderByAggregateInput = {
@@ -381,6 +401,7 @@ export type BookingMaxOrderByAggregateInput = {
   idempotencyKey?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
+  cancelledAt?: Prisma.SortOrder
 }
 
 export type BookingMinOrderByAggregateInput = {
@@ -392,6 +413,7 @@ export type BookingMinOrderByAggregateInput = {
   idempotencyKey?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
+  cancelledAt?: Prisma.SortOrder
 }
 
 export type BookingCreateNestedManyWithoutOrganizationInput = {
@@ -524,12 +546,17 @@ export type EnumBookingStatusFieldUpdateOperationsInput = {
   set?: $Enums.BookingStatus
 }
 
+export type NullableDateTimeFieldUpdateOperationsInput = {
+  set?: Date | string | null
+}
+
 export type BookingCreateWithoutOrganizationInput = {
   id?: string
   status?: $Enums.BookingStatus
   idempotencyKey: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  cancelledAt?: Date | string | null
   member: Prisma.OrganizationUserCreateNestedOneWithoutBookingsInput
   slot: Prisma.MentorSlotCreateNestedOneWithoutBookingsInput
 }
@@ -542,6 +569,7 @@ export type BookingUncheckedCreateWithoutOrganizationInput = {
   idempotencyKey: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  cancelledAt?: Date | string | null
 }
 
 export type BookingCreateOrConnectWithoutOrganizationInput = {
@@ -582,6 +610,7 @@ export type BookingScalarWhereInput = {
   idempotencyKey?: Prisma.StringFilter<"Booking"> | string
   createdAt?: Prisma.DateTimeFilter<"Booking"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Booking"> | Date | string
+  cancelledAt?: Prisma.DateTimeNullableFilter<"Booking"> | Date | string | null
 }
 
 export type BookingCreateWithoutMemberInput = {
@@ -590,6 +619,7 @@ export type BookingCreateWithoutMemberInput = {
   idempotencyKey: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  cancelledAt?: Date | string | null
   organization: Prisma.OrganizationCreateNestedOneWithoutBookingsInput
   slot: Prisma.MentorSlotCreateNestedOneWithoutBookingsInput
 }
@@ -601,6 +631,7 @@ export type BookingUncheckedCreateWithoutMemberInput = {
   idempotencyKey: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  cancelledAt?: Date | string | null
 }
 
 export type BookingCreateOrConnectWithoutMemberInput = {
@@ -635,6 +666,7 @@ export type BookingCreateWithoutSlotInput = {
   idempotencyKey: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  cancelledAt?: Date | string | null
   organization: Prisma.OrganizationCreateNestedOneWithoutBookingsInput
   member: Prisma.OrganizationUserCreateNestedOneWithoutBookingsInput
 }
@@ -646,6 +678,7 @@ export type BookingUncheckedCreateWithoutSlotInput = {
   idempotencyKey: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  cancelledAt?: Date | string | null
 }
 
 export type BookingCreateOrConnectWithoutSlotInput = {
@@ -682,6 +715,7 @@ export type BookingCreateManyOrganizationInput = {
   idempotencyKey: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  cancelledAt?: Date | string | null
 }
 
 export type BookingUpdateWithoutOrganizationInput = {
@@ -690,6 +724,7 @@ export type BookingUpdateWithoutOrganizationInput = {
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  cancelledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   member?: Prisma.OrganizationUserUpdateOneRequiredWithoutBookingsNestedInput
   slot?: Prisma.MentorSlotUpdateOneRequiredWithoutBookingsNestedInput
 }
@@ -702,6 +737,7 @@ export type BookingUncheckedUpdateWithoutOrganizationInput = {
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  cancelledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type BookingUncheckedUpdateManyWithoutOrganizationInput = {
@@ -712,6 +748,7 @@ export type BookingUncheckedUpdateManyWithoutOrganizationInput = {
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  cancelledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type BookingCreateManyMemberInput = {
@@ -721,6 +758,7 @@ export type BookingCreateManyMemberInput = {
   idempotencyKey: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  cancelledAt?: Date | string | null
 }
 
 export type BookingUpdateWithoutMemberInput = {
@@ -729,6 +767,7 @@ export type BookingUpdateWithoutMemberInput = {
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  cancelledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   organization?: Prisma.OrganizationUpdateOneRequiredWithoutBookingsNestedInput
   slot?: Prisma.MentorSlotUpdateOneRequiredWithoutBookingsNestedInput
 }
@@ -740,6 +779,7 @@ export type BookingUncheckedUpdateWithoutMemberInput = {
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  cancelledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type BookingUncheckedUpdateManyWithoutMemberInput = {
@@ -749,6 +789,7 @@ export type BookingUncheckedUpdateManyWithoutMemberInput = {
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  cancelledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type BookingCreateManySlotInput = {
@@ -758,6 +799,7 @@ export type BookingCreateManySlotInput = {
   idempotencyKey: string
   createdAt?: Date | string
   updatedAt?: Date | string
+  cancelledAt?: Date | string | null
 }
 
 export type BookingUpdateWithoutSlotInput = {
@@ -766,6 +808,7 @@ export type BookingUpdateWithoutSlotInput = {
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  cancelledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   organization?: Prisma.OrganizationUpdateOneRequiredWithoutBookingsNestedInput
   member?: Prisma.OrganizationUserUpdateOneRequiredWithoutBookingsNestedInput
 }
@@ -777,6 +820,7 @@ export type BookingUncheckedUpdateWithoutSlotInput = {
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  cancelledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 export type BookingUncheckedUpdateManyWithoutSlotInput = {
@@ -786,6 +830,7 @@ export type BookingUncheckedUpdateManyWithoutSlotInput = {
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  cancelledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
 }
 
 
@@ -799,6 +844,7 @@ export type BookingSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs 
   idempotencyKey?: boolean
   createdAt?: boolean
   updatedAt?: boolean
+  cancelledAt?: boolean
   organization?: boolean | Prisma.OrganizationDefaultArgs<ExtArgs>
   member?: boolean | Prisma.OrganizationUserDefaultArgs<ExtArgs>
   slot?: boolean | Prisma.MentorSlotDefaultArgs<ExtArgs>
@@ -813,6 +859,7 @@ export type BookingSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Exten
   idempotencyKey?: boolean
   createdAt?: boolean
   updatedAt?: boolean
+  cancelledAt?: boolean
   organization?: boolean | Prisma.OrganizationDefaultArgs<ExtArgs>
   member?: boolean | Prisma.OrganizationUserDefaultArgs<ExtArgs>
   slot?: boolean | Prisma.MentorSlotDefaultArgs<ExtArgs>
@@ -827,6 +874,7 @@ export type BookingSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Exten
   idempotencyKey?: boolean
   createdAt?: boolean
   updatedAt?: boolean
+  cancelledAt?: boolean
   organization?: boolean | Prisma.OrganizationDefaultArgs<ExtArgs>
   member?: boolean | Prisma.OrganizationUserDefaultArgs<ExtArgs>
   slot?: boolean | Prisma.MentorSlotDefaultArgs<ExtArgs>
@@ -841,9 +889,10 @@ export type BookingSelectScalar = {
   idempotencyKey?: boolean
   createdAt?: boolean
   updatedAt?: boolean
+  cancelledAt?: boolean
 }
 
-export type BookingOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "organizationId" | "memberID" | "slotId" | "status" | "idempotencyKey" | "createdAt" | "updatedAt", ExtArgs["result"]["booking"]>
+export type BookingOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "organizationId" | "memberID" | "slotId" | "status" | "idempotencyKey" | "createdAt" | "updatedAt" | "cancelledAt", ExtArgs["result"]["booking"]>
 export type BookingInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   organization?: boolean | Prisma.OrganizationDefaultArgs<ExtArgs>
   member?: boolean | Prisma.OrganizationUserDefaultArgs<ExtArgs>
@@ -876,6 +925,7 @@ export type $BookingPayload<ExtArgs extends runtime.Types.Extensions.InternalArg
     idempotencyKey: string
     createdAt: Date
     updatedAt: Date
+    cancelledAt: Date | null
   }, ExtArgs["result"]["booking"]>
   composites: {}
 }
@@ -1310,6 +1360,7 @@ export interface BookingFieldRefs {
   readonly idempotencyKey: Prisma.FieldRef<"Booking", 'String'>
   readonly createdAt: Prisma.FieldRef<"Booking", 'DateTime'>
   readonly updatedAt: Prisma.FieldRef<"Booking", 'DateTime'>
+  readonly cancelledAt: Prisma.FieldRef<"Booking", 'DateTime'>
 }
     
 

@@ -1,0 +1,597 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Chronus Booking API",
+    "version": "1.0.0",
+    "description": "API documentation for the Chronus multi-tenant mentor booking application."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3010/api/v1",
+      "description": "Local development server"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health Check",
+        "description": "Diagnostic health check to verify API status and database connectivity.",
+        "responses": {
+          "200": {
+            "description": "Successful diagnostic check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "ok" },
+                    "timestamp": { "type": "string", "example": "2026-08-27T19:46:21.000Z" },
+                    "databaseConfigured": { "type": "boolean", "example": true },
+                    "databaseStatus": { "type": "string", "example": "connected" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database connection error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "ok" },
+                    "timestamp": { "type": "string", "example": "2026-08-27T19:46:21.000Z" },
+                    "databaseConfigured": { "type": "boolean", "example": true },
+                    "databaseStatus": { "type": "string", "example": "error" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users": {
+      "get": {
+        "summary": "List All Organization Users",
+        "description": "Fetches all members and mentors across all organizations. Useful for selecting/mocking identities on the frontend.",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "membershipId": { "type": "string", "format": "uuid" },
+                      "userId": { "type": "string", "format": "uuid" },
+                      "email": { "type": "string", "format": "email" },
+                      "name": { "type": "string" },
+                      "timezone": { "type": "string", "example": "America/New_York" },
+                      "isMentor": { "type": "boolean" },
+                      "organization": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string", "format": "uuid" },
+                          "name": { "type": "string" }
+                        }
+                      },
+                      "createdAt": { "type": "string", "format": "date-time" },
+                      "updatedAt": { "type": "string", "format": "date-time" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "summary": "User Login",
+        "description": "Authenticates a user for a specific organization and sets a secure httpOnly cookie with a JWT token.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["userId", "organizationId"],
+                "properties": {
+                  "userId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "example": "12345678-1234-1234-1234-123456789abc"
+                  },
+                  "organizationId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "example": "abcdef12-abcd-abcd-abcd-abcdef123456"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful authentication, cookie set",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string",
+                  "example": "token=eyJhbGciOi...; Path=/; HttpOnly; SameSite=Lax"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "example": "Login successful" },
+                    "user": {
+                      "type": "object",
+                      "properties": {
+                        "membershipId": { "type": "string", "format": "uuid" },
+                        "userId": { "type": "string", "format": "uuid" },
+                        "organizationId": { "type": "string", "format": "uuid" },
+                        "name": { "type": "string" },
+                        "email": { "type": "string", "format": "email" },
+                        "timezone": { "type": "string" },
+                        "isMentor": { "type": "boolean" },
+                        "organizationName": { "type": "string" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input formatting"
+          },
+          "401": {
+            "description": "Invalid credentials or membership not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "summary": "User Logout",
+        "description": "Clears the authentication token cookie.",
+        "responses": {
+          "200": {
+            "description": "Successfully cleared auth session cookie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "example": "Logout successful" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mentors": {
+      "get": {
+        "summary": "List Organization Mentors",
+        "description": "Fetches all active mentors in the authenticated user's organization. Requires the session cookie.",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of mentors in the organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "membershipId": { "type": "string", "format": "uuid" },
+                      "userId": { "type": "string", "format": "uuid" },
+                      "email": { "type": "string", "format": "email" },
+                      "name": { "type": "string" },
+                      "timezone": { "type": "string", "example": "America/New_York" },
+                      "createdAt": { "type": "string", "format": "date-time" },
+                      "updatedAt": { "type": "string", "format": "date-time" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or invalid session"
+          },
+          "403": {
+            "description": "Membership deactivated or invalid"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/{orgId}/mentors": {
+      "get": {
+        "summary": "List Organization Mentors by orgId parameter",
+        "description": "Fetches active mentors by orgId parameter, enforcing that the orgId matches the authenticated user's organizationId claims.",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "description": "The Organization ID (UUID)",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of mentors in the organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "membershipId": { "type": "string", "format": "uuid" },
+                      "userId": { "type": "string", "format": "uuid" },
+                      "email": { "type": "string", "format": "email" },
+                      "name": { "type": "string" },
+                      "timezone": { "type": "string", "example": "America/New_York" },
+                      "createdAt": { "type": "string", "format": "date-time" },
+                      "updatedAt": { "type": "string", "format": "date-time" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid organization ID format"
+          },
+          "401": {
+            "description": "Authentication required or invalid session"
+          },
+          "403": {
+            "description": "Access denied due to tenant boundary validation mismatch"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/mentors/{mentorId}/slots": {
+      "get": {
+        "summary": "List Mentor Slots",
+        "description": "Fetches availability slots for a specific mentor within the authenticated user's organization. Requires the session cookie.",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "mentorId",
+            "in": "path",
+            "required": true,
+            "description": "The Mentor's membership ID (UUID)",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of slots for the mentor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string", "format": "uuid" },
+                      "organizationId": { "type": "string", "format": "uuid" },
+                      "mentorId": { "type": "string", "format": "uuid" },
+                      "startTime": { "type": "string", "format": "date-time" },
+                      "endTime": { "type": "string", "format": "date-time" },
+                      "status": { "type": "string", "enum": ["AVAILABLE", "BOOKED"] },
+                      "createdAt": { "type": "string", "format": "date-time" },
+                      "updatedAt": { "type": "string", "format": "date-time" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid mentor ID format"
+          },
+          "401": {
+            "description": "Authentication required or invalid session"
+          },
+          "403": {
+            "description": "Access denied due to invalid membership"
+          },
+          "404": {
+            "description": "Mentor not found in organization"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/{orgId}/mentors/{mentorId}/slots": {
+      "get": {
+        "summary": "List Mentor Slots by orgId parameter",
+        "description": "Fetches availability slots for a specific mentor by orgId parameter, enforcing that the orgId matches the authenticated user's organizationId claims.",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "description": "The Organization ID (UUID)",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "mentorId",
+            "in": "path",
+            "required": true,
+            "description": "The Mentor's membership ID (UUID)",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of slots for the mentor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string", "format": "uuid" },
+                      "organizationId": { "type": "string", "format": "uuid" },
+                      "mentorId": { "type": "string", "format": "uuid" },
+                      "startTime": { "type": "string", "format": "date-time" },
+                      "endTime": { "type": "string", "format": "date-time" },
+                      "status": { "type": "string", "enum": ["AVAILABLE", "BOOKED"] },
+                      "createdAt": { "type": "string", "format": "date-time" },
+                      "updatedAt": { "type": "string", "format": "date-time" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameter format"
+          },
+          "401": {
+            "description": "Authentication required or invalid session"
+          },
+          "403": {
+            "description": "Access denied due to tenant boundary validation mismatch or invalid membership"
+          },
+          "404": {
+            "description": "Mentor not found in organization"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/bookings": {
+      "get": {
+        "summary": "List User Bookings",
+        "description": "Fetches all bookings (active and cancelled) for the authenticated user as a member. Requires the session cookie.",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of user bookings with slots and mentor details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string", "format": "uuid" },
+                      "status": { "type": "string", "enum": ["ACTIVE", "CANCELLED"] },
+                      "idempotencyKey": { "type": "string" },
+                      "createdAt": { "type": "string", "format": "date-time" },
+                      "updatedAt": { "type": "string", "format": "date-time" },
+                      "slot": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string", "format": "uuid" },
+                          "startTime": { "type": "string", "format": "date-time" },
+                          "endTime": { "type": "string", "format": "date-time" },
+                          "mentor": {
+                            "type": "object",
+                            "properties": {
+                              "membershipId": { "type": "string", "format": "uuid" },
+                              "userId": { "type": "string", "format": "uuid" },
+                              "name": { "type": "string" },
+                              "email": { "type": "string", "format": "email" },
+                              "timezone": { "type": "string" }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or invalid session"
+          },
+          "403": {
+            "description": "Access denied due to invalid membership"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Booking",
+        "description": "Book a mentor's availability slot. Employs a database transaction to verify availability and lock the slot to prevent concurrency/double-bookings. Idempotent key ensures request duplicate protection.",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["slotId", "idempotencyKey"],
+                "properties": {
+                  "slotId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "example": "9a38eb6c-7e61-46ab-844c-9f88d7456d98"
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "example": "idempotent-key-12345"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Booking successfully created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string", "format": "uuid" },
+                    "status": { "type": "string", "example": "ACTIVE" },
+                    "idempotencyKey": { "type": "string" },
+                    "createdAt": { "type": "string", "format": "date-time" },
+                    "updatedAt": { "type": "string", "format": "date-time" },
+                    "slot": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string", "format": "uuid" },
+                        "startTime": { "type": "string", "format": "date-time" },
+                        "endTime": { "type": "string", "format": "date-time" },
+                        "mentor": {
+                          "type": "object",
+                          "properties": {
+                            "membershipId": { "type": "string", "format": "uuid" },
+                            "userId": { "type": "string", "format": "uuid" },
+                            "name": { "type": "string" },
+                            "email": { "type": "string", "format": "email" },
+                            "timezone": { "type": "string" }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Booking replayed via idempotency key",
+            "headers": {
+              "x-idempotent-replayed": {
+                "schema": {
+                  "type": "string",
+                  "example": "true"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input formatting or attempting to book own slot"
+          },
+          "401": {
+            "description": "Authentication required or invalid session"
+          },
+          "403": {
+            "description": "Access denied due to invalid membership"
+          },
+          "404": {
+            "description": "Slot not found in organization"
+          },
+          "409": {
+            "description": "Conflict. Slot is already booked or is no longer available"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "cookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "token"
+      }
+    }
+  }
+}

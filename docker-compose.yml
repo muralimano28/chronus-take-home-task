@@ -30,6 +30,7 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: postgres://postgres:password@postgres:5432/chronus_db
+      JWT_SECRET: super-secret-key-change-in-production
       PORT: 3010
     depends_on:
       postgres:
