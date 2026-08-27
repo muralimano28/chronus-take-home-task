@@ -1,0 +1,9 @@
+{
+  "name": "@chronus/tsconfig",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "exports": {
+    "./base.json": "./base.json"
+  }
+}
