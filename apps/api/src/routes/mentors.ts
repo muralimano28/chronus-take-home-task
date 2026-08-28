@@ -12,14 +12,15 @@ const router = Router({ mergeParams: true });
  */
 router.get("/", requireAuth, validateTenantAccess, async (req: AuthenticatedRequest, res) => {
   // Extract tenant context from authenticated JWT payload
-  const { organizationId } = req.user!;
+  const { organizationId, membershipId } = req.user!;
 
   try {
-    // 1. Query all mentors within the same organization
+    // 1. Query all mentors within the same organization, excluding the current user
     const mentors = await prisma.organizationUser.findMany({
       where: {
         organizationId,
         isMentor: true,
+        id: { not: membershipId },
       },
       include: {
         user: {
@@ -93,6 +94,7 @@ router.get("/:mentorId/slots", requireAuth, validateTenantAccess, async (req: Au
       where: {
         organizationId,
         mentorId,
+        status: "AVAILABLE",
         startTime: {
           gte: new Date(),
         },

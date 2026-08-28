@@ -1,3 +1,11 @@
 export * from "./lib/utils";
 export * from "./components/button";
 export * from "./components/card";
+export * from "./components/dropdown-menu";
+export * from "./components/avatar";
+export * from "./components/drawer";
+export * from "./components/sheet";
+export * from "./components/sonner";
+export * from "./components/select";
+export * from "./components/alert-dialog";
+export { toast } from "sonner";

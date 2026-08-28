@@ -133,8 +133,21 @@ Why: Rescheduling does not create a new booking record. Instead, the `slotId` of
 Decision 27 — Preventing Past Bookings and Rescheduling
 Why: The system must enforce that slot reservations (for new bookings or rescheduled ones) occur in the future. Enforcing this logic at the API controller boundary prevents scheduling discrepancies, calendar history corruption, and logical conflicts resulting from past session assignments.
 
-Decision 28 — Pessimistic Row Locking for Overlap Prevention (SELECT FOR UPDATE)
-Why: To prevent concurrent overlap check bypasses (where a single member books multiple overlapping slots at the same time), we lock the member's `OrganizationUser` row using `SELECT ... FOR UPDATE` at the beginning of the transaction. Although this is a simple and reliable solution for now, it can lead to connection pool saturation or increased queue latency during high-traffic periods. We plan to migrate to a Redis-based distributed lock as the scheduling flow is enhanced.
+Decision 28 — Pessimistic Row Locking for Overlap Prevention (SELECT FOR UPDATE) (Temporary)
+Why: To prevent concurrent overlap check bypasses (where a single member books multiple overlapping slots at the same time), we lock the member's `OrganizationUser` row using `SELECT ... FOR UPDATE` at the beginning of the transaction. 
+* **Downside**: Locking the membership row can lead to database connection pool saturation, transactional deadlocks, or increased API queue latency during high-concurrency periods under a single user account context.
+* **Future Mitigation**: To resolve this concurrency and scaling bottleneck, we plan to migrate to a Redis-based distributed lock to coordinate resource access at the application layer without blocking database rows.
 
 Decision 29 — Shared UI package and Tailwind CSS v4 setup
 Why: Creating a shared @chronus/ui package with Tailwind CSS v4 and the official @tailwindcss/vite plugin ensures high-performance compilation, clean monorepo architecture, and standard, reusable shadcn components that can be used across multiple frontend applications.
+
+Decision 30 — TanStack Router and Router Devtools Integration
+Why: Configuring TanStack Router with file-based routing and devtools in the apps/web Vite project enables robust type-safe URL routing, auto-code-splitting, state management based on search parameters, and a dedicated debugging panel.
+
+Decision 31 — Axios Integration with Cookie Credentials
+Why: Setting up Axios with `withCredentials: true` by default ensures that JWT cookies stored in the browser are securely and automatically attached to API requests, fulfilling our multi-tenant and secure authentication requirements.
+
+Decision 32 — Client-side Session Cache in LocalStorage (Temporary)
+Why: Storing non-sensitive user metadata (name, email, timezone, organizationName) in `localStorage` allows the client application to instantly restore UI display state on browser page refreshes, avoiding layout shifts or a "flash of unauthenticated state". 
+* **Downside**: Storing state in `localStorage` can lead to client-side stale data if the user's membership details or organization name changes on the server. The client will remain unaware of the server-side updates until they log out and log back in.
+* **Future Mitigation**: To resolve this security and sync downside, we plan to implement a `/auth/me` (or `/auth/session`) endpoint on the API server. Upon app mount, the client will fetch the authenticated session directly from this endpoint, verifying the cookie-based JWT token and populating the context state dynamically from the database.

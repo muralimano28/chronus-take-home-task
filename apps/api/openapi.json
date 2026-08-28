@@ -583,6 +583,89 @@
           }
         }
       }
+    },
+    "/bookings/{bookingId}/cancel": {
+      "post": {
+        "summary": "Cancel Booking",
+        "description": "Cancels an active booking and frees the slot. Uses Idempotency-Key if provided.",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bookingId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Booking cancelled successfully"
+          },
+          "400": {
+            "description": "Cannot cancel a booking in the past"
+          },
+          "404": {
+            "description": "Booking not found"
+          }
+        }
+      }
+    },
+    "/bookings/{bookingId}/reschedule": {
+      "post": {
+        "summary": "Reschedule Booking",
+        "description": "Reschedules an active booking to a new slot. Uses Idempotency-Key.",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bookingId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["newSlotId"],
+                "properties": {
+                  "newSlotId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Booking rescheduled successfully"
+          },
+          "400": {
+            "description": "Invalid slot or booking status"
+          },
+          "404": {
+            "description": "Booking or slot not found"
+          }
+        }
+      }
     }
   },
   "components": {

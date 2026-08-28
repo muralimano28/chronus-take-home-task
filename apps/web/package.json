@@ -5,14 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "vite build && tsc",
     "preview": "vite preview"
   },
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "@chronus/ui": "workspace:*",
-    "lucide-react": "^0.475.0"
+    "lucide-react": "^0.475.0",
+    "@tanstack/react-router": "^1.112.0",
+    "axios": "^1.7.9"
   },
   "devDependencies": {
     "@chronus/tsconfig": "workspace:*",
@@ -22,6 +24,8 @@
     "typescript": "^5.5.4",
     "vite": "^8.2.2",
     "tailwindcss": "^4.0.0",
-    "@tailwindcss/vite": "^4.0.0"
+    "@tailwindcss/vite": "^4.0.0",
+    "@tanstack/router-plugin": "^1.112.0",
+    "@tanstack/router-devtools": "^1.112.0"
   }
 }
