@@ -26,22 +26,29 @@ RUN pnpm build
 # Runner stage
 FROM node:20-alpine AS runner
 WORKDIR /app
-RUN npm install -g pnpm@9.7.0
-
 # Don't run as root in production
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 express
-USER express
 
 # Copy workspaces and root node_modules (where actual files reside in .pnpm)
 COPY --from=installer /app/node_modules/ ./node_modules/
+COPY --from=installer /app/packages/ ./packages/
 COPY --from=installer /app/apps/api/node_modules/ ./apps/api/node_modules/
 COPY --from=installer /app/apps/api/package.json ./apps/api/package.json
 COPY --from=installer /app/apps/api/dist/ ./apps/api/dist/
+
+# Copy entrypoint script
+COPY apps/api/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
+# Change ownership of /app to express user
+RUN chown -R express:nodejs /app
+
+USER express
 
 WORKDIR /app/apps/api
 ENV PORT=3010
 ENV NODE_ENV=production
 EXPOSE 3010
 
-CMD ["node", "dist/index.js"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

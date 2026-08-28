@@ -111,3 +111,18 @@ Why: A mentor cannot book a session with themselves. Enforcing this business val
 
 Decision 20 — Optimistic Concurrency Control over Pessimistic Row Locking (`FOR UPDATE`)
 Why: Atomic, state-based updates (e.g., updating slot status with a conditional `WHERE status = 'AVAILABLE'`) provide highly performant, lock-free concurrency safety. It avoids database-level transaction queuing and deadlock hazards typical of `SELECT ... FOR UPDATE` row locks, while ensuring that concurrent bookings still fail safely when the slot's state has already transitioned.
+
+Decision 21 — Sequential Integration Testing in Shared Database
+Why: To test database features like unique constraints, concurrency, and transactions, integration tests must run against a real PostgreSQL instance. Since running test files in parallel would cause race conditions and data conflicts (where one test deletes rows that another is reading), we configure Vitest to run test suites sequentially using `fileParallelism: false`. This ensures complete data isolation between test files without complex dynamic schema provisioning.
+
+Decision 22 — Verification of JWT Claims Against Database State (Single Source of Truth)
+Why: Relying strictly on mutable claims embedded in a client-side JWT (such as `isMentor` or role tags) introduces security vulnerabilities if privileges are changed, disabled, or revoked. To mitigate this risk, the authentication middleware utilizes only the identity identifiers (`membershipId` and `organizationId`) from the token, and queries the database directly to confirm the membership remains valid. Any downstream endpoint requiring specific capabilities (like slots administration or mentor validations) fetches permissions directly from the database record rather than consuming claims from the token payload.
+
+Decision 23 — Overlapping Booking Prevention
+Why: A member should not be allowed to book overlapping slots (i.e., having multiple active sessions at the same time). Enforcing this check at the API layer prevents scheduling conflicts and maintains user calendar consistency.
+
+Decision 24 — Concurrency-Safe Idempotent Replays
+Why: In high-concurrency environments, multiple requests with the identical idempotency key may attempt to reserve a slot at the same instant. When the first request succeeds, it marks the slot as `BOOKED`, causing concurrent transactions to fail their state checks. Rather than yielding a generic `409` conflict error for duplicate requests, the server catches the state-transition error and attempts to locate the concurrently created booking. If one exists, it returns a `200` replayed booking payload, honoring the idempotency contract under heavy race conditions.
+
+Decision 25 — Filtering Past Availability Slots
+Why: A mentor's availability list must not expose historical or expired slots. Enforcing a filter at the database query level (`startTime >= now`) ensures that members only view and book future slots, reducing API payload sizes and preventing stale booking requests.

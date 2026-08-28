@@ -881,7 +881,7 @@ export type MentorSlotScalarFieldEnum = (typeof MentorSlotScalarFieldEnum)[keyof
 export const BookingScalarFieldEnum = {
   id: 'id',
   organizationId: 'organizationId',
-  memberID: 'memberID',
+  memberId: 'memberId',
   slotId: 'slotId',
   status: 'status',
   idempotencyKey: 'idempotencyKey',

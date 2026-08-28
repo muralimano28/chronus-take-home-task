@@ -27,7 +27,7 @@ export type AggregateBooking = {
 export type BookingMinAggregateOutputType = {
   id: string | null
   organizationId: string | null
-  memberID: string | null
+  memberId: string | null
   slotId: string | null
   status: $Enums.BookingStatus | null
   idempotencyKey: string | null
@@ -39,7 +39,7 @@ export type BookingMinAggregateOutputType = {
 export type BookingMaxAggregateOutputType = {
   id: string | null
   organizationId: string | null
-  memberID: string | null
+  memberId: string | null
   slotId: string | null
   status: $Enums.BookingStatus | null
   idempotencyKey: string | null
@@ -51,7 +51,7 @@ export type BookingMaxAggregateOutputType = {
 export type BookingCountAggregateOutputType = {
   id: number
   organizationId: number
-  memberID: number
+  memberId: number
   slotId: number
   status: number
   idempotencyKey: number
@@ -65,7 +65,7 @@ export type BookingCountAggregateOutputType = {
 export type BookingMinAggregateInputType = {
   id?: true
   organizationId?: true
-  memberID?: true
+  memberId?: true
   slotId?: true
   status?: true
   idempotencyKey?: true
@@ -77,7 +77,7 @@ export type BookingMinAggregateInputType = {
 export type BookingMaxAggregateInputType = {
   id?: true
   organizationId?: true
-  memberID?: true
+  memberId?: true
   slotId?: true
   status?: true
   idempotencyKey?: true
@@ -89,7 +89,7 @@ export type BookingMaxAggregateInputType = {
 export type BookingCountAggregateInputType = {
   id?: true
   organizationId?: true
-  memberID?: true
+  memberId?: true
   slotId?: true
   status?: true
   idempotencyKey?: true
@@ -174,7 +174,7 @@ export type BookingGroupByArgs<ExtArgs extends runtime.Types.Extensions.Internal
 export type BookingGroupByOutputType = {
   id: string
   organizationId: string
-  memberID: string
+  memberId: string
   slotId: string
   status: $Enums.BookingStatus
   idempotencyKey: string
@@ -207,7 +207,7 @@ export type BookingWhereInput = {
   NOT?: Prisma.BookingWhereInput | Prisma.BookingWhereInput[]
   id?: Prisma.UuidFilter<"Booking"> | string
   organizationId?: Prisma.UuidFilter<"Booking"> | string
-  memberID?: Prisma.UuidFilter<"Booking"> | string
+  memberId?: Prisma.UuidFilter<"Booking"> | string
   slotId?: Prisma.UuidFilter<"Booking"> | string
   status?: Prisma.EnumBookingStatusFilter<"Booking"> | $Enums.BookingStatus
   idempotencyKey?: Prisma.StringFilter<"Booking"> | string
@@ -222,7 +222,7 @@ export type BookingWhereInput = {
 export type BookingOrderByWithRelationInput = {
   id?: Prisma.SortOrder
   organizationId?: Prisma.SortOrder
-  memberID?: Prisma.SortOrder
+  memberId?: Prisma.SortOrder
   slotId?: Prisma.SortOrder
   status?: Prisma.SortOrder
   idempotencyKey?: Prisma.SortOrder
@@ -237,12 +237,12 @@ export type BookingOrderByWithRelationInput = {
 export type BookingWhereUniqueInput = Prisma.AtLeast<{
   id?: string
   slotId?: string
-  organizationId_memberID_idempotencyKey?: Prisma.BookingOrganizationIdMemberIDIdempotencyKeyCompoundUniqueInput
+  organizationId_memberId_idempotencyKey?: Prisma.BookingOrganizationIdMemberIdIdempotencyKeyCompoundUniqueInput
   AND?: Prisma.BookingWhereInput | Prisma.BookingWhereInput[]
   OR?: Prisma.BookingWhereInput[]
   NOT?: Prisma.BookingWhereInput | Prisma.BookingWhereInput[]
   organizationId?: Prisma.UuidFilter<"Booking"> | string
-  memberID?: Prisma.UuidFilter<"Booking"> | string
+  memberId?: Prisma.UuidFilter<"Booking"> | string
   status?: Prisma.EnumBookingStatusFilter<"Booking"> | $Enums.BookingStatus
   idempotencyKey?: Prisma.StringFilter<"Booking"> | string
   createdAt?: Prisma.DateTimeFilter<"Booking"> | Date | string
@@ -251,12 +251,12 @@ export type BookingWhereUniqueInput = Prisma.AtLeast<{
   organization?: Prisma.XOR<Prisma.OrganizationScalarRelationFilter, Prisma.OrganizationWhereInput>
   member?: Prisma.XOR<Prisma.OrganizationUserScalarRelationFilter, Prisma.OrganizationUserWhereInput>
   slot?: Prisma.XOR<Prisma.MentorSlotScalarRelationFilter, Prisma.MentorSlotWhereInput>
-}, "id" | "slotId" | "organizationId_memberID_idempotencyKey">
+}, "id" | "slotId" | "organizationId_memberId_idempotencyKey">
 
 export type BookingOrderByWithAggregationInput = {
   id?: Prisma.SortOrder
   organizationId?: Prisma.SortOrder
-  memberID?: Prisma.SortOrder
+  memberId?: Prisma.SortOrder
   slotId?: Prisma.SortOrder
   status?: Prisma.SortOrder
   idempotencyKey?: Prisma.SortOrder
@@ -274,7 +274,7 @@ export type BookingScalarWhereWithAggregatesInput = {
   NOT?: Prisma.BookingScalarWhereWithAggregatesInput | Prisma.BookingScalarWhereWithAggregatesInput[]
   id?: Prisma.UuidWithAggregatesFilter<"Booking"> | string
   organizationId?: Prisma.UuidWithAggregatesFilter<"Booking"> | string
-  memberID?: Prisma.UuidWithAggregatesFilter<"Booking"> | string
+  memberId?: Prisma.UuidWithAggregatesFilter<"Booking"> | string
   slotId?: Prisma.UuidWithAggregatesFilter<"Booking"> | string
   status?: Prisma.EnumBookingStatusWithAggregatesFilter<"Booking"> | $Enums.BookingStatus
   idempotencyKey?: Prisma.StringWithAggregatesFilter<"Booking"> | string
@@ -298,7 +298,7 @@ export type BookingCreateInput = {
 export type BookingUncheckedCreateInput = {
   id?: string
   organizationId: string
-  memberID: string
+  memberId: string
   slotId: string
   status?: $Enums.BookingStatus
   idempotencyKey: string
@@ -322,7 +322,7 @@ export type BookingUpdateInput = {
 export type BookingUncheckedUpdateInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   organizationId?: Prisma.StringFieldUpdateOperationsInput | string
-  memberID?: Prisma.StringFieldUpdateOperationsInput | string
+  memberId?: Prisma.StringFieldUpdateOperationsInput | string
   slotId?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.EnumBookingStatusFieldUpdateOperationsInput | $Enums.BookingStatus
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
@@ -334,7 +334,7 @@ export type BookingUncheckedUpdateInput = {
 export type BookingCreateManyInput = {
   id?: string
   organizationId: string
-  memberID: string
+  memberId: string
   slotId: string
   status?: $Enums.BookingStatus
   idempotencyKey: string
@@ -355,7 +355,7 @@ export type BookingUpdateManyMutationInput = {
 export type BookingUncheckedUpdateManyInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   organizationId?: Prisma.StringFieldUpdateOperationsInput | string
-  memberID?: Prisma.StringFieldUpdateOperationsInput | string
+  memberId?: Prisma.StringFieldUpdateOperationsInput | string
   slotId?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.EnumBookingStatusFieldUpdateOperationsInput | $Enums.BookingStatus
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
@@ -374,16 +374,16 @@ export type BookingOrderByRelationAggregateInput = {
   _count?: Prisma.SortOrder
 }
 
-export type BookingOrganizationIdMemberIDIdempotencyKeyCompoundUniqueInput = {
+export type BookingOrganizationIdMemberIdIdempotencyKeyCompoundUniqueInput = {
   organizationId: string
-  memberID: string
+  memberId: string
   idempotencyKey: string
 }
 
 export type BookingCountOrderByAggregateInput = {
   id?: Prisma.SortOrder
   organizationId?: Prisma.SortOrder
-  memberID?: Prisma.SortOrder
+  memberId?: Prisma.SortOrder
   slotId?: Prisma.SortOrder
   status?: Prisma.SortOrder
   idempotencyKey?: Prisma.SortOrder
@@ -395,7 +395,7 @@ export type BookingCountOrderByAggregateInput = {
 export type BookingMaxOrderByAggregateInput = {
   id?: Prisma.SortOrder
   organizationId?: Prisma.SortOrder
-  memberID?: Prisma.SortOrder
+  memberId?: Prisma.SortOrder
   slotId?: Prisma.SortOrder
   status?: Prisma.SortOrder
   idempotencyKey?: Prisma.SortOrder
@@ -407,7 +407,7 @@ export type BookingMaxOrderByAggregateInput = {
 export type BookingMinOrderByAggregateInput = {
   id?: Prisma.SortOrder
   organizationId?: Prisma.SortOrder
-  memberID?: Prisma.SortOrder
+  memberId?: Prisma.SortOrder
   slotId?: Prisma.SortOrder
   status?: Prisma.SortOrder
   idempotencyKey?: Prisma.SortOrder
@@ -563,7 +563,7 @@ export type BookingCreateWithoutOrganizationInput = {
 
 export type BookingUncheckedCreateWithoutOrganizationInput = {
   id?: string
-  memberID: string
+  memberId: string
   slotId: string
   status?: $Enums.BookingStatus
   idempotencyKey: string
@@ -604,7 +604,7 @@ export type BookingScalarWhereInput = {
   NOT?: Prisma.BookingScalarWhereInput | Prisma.BookingScalarWhereInput[]
   id?: Prisma.UuidFilter<"Booking"> | string
   organizationId?: Prisma.UuidFilter<"Booking"> | string
-  memberID?: Prisma.UuidFilter<"Booking"> | string
+  memberId?: Prisma.UuidFilter<"Booking"> | string
   slotId?: Prisma.UuidFilter<"Booking"> | string
   status?: Prisma.EnumBookingStatusFilter<"Booking"> | $Enums.BookingStatus
   idempotencyKey?: Prisma.StringFilter<"Booking"> | string
@@ -673,7 +673,7 @@ export type BookingCreateWithoutSlotInput = {
 
 export type BookingUncheckedCreateWithoutSlotInput = {
   id?: string
-  memberID: string
+  memberId: string
   status?: $Enums.BookingStatus
   idempotencyKey: string
   createdAt?: Date | string
@@ -709,7 +709,7 @@ export type BookingUpdateManyWithWhereWithoutSlotInput = {
 
 export type BookingCreateManyOrganizationInput = {
   id?: string
-  memberID: string
+  memberId: string
   slotId: string
   status?: $Enums.BookingStatus
   idempotencyKey: string
@@ -731,7 +731,7 @@ export type BookingUpdateWithoutOrganizationInput = {
 
 export type BookingUncheckedUpdateWithoutOrganizationInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
-  memberID?: Prisma.StringFieldUpdateOperationsInput | string
+  memberId?: Prisma.StringFieldUpdateOperationsInput | string
   slotId?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.EnumBookingStatusFieldUpdateOperationsInput | $Enums.BookingStatus
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
@@ -742,7 +742,7 @@ export type BookingUncheckedUpdateWithoutOrganizationInput = {
 
 export type BookingUncheckedUpdateManyWithoutOrganizationInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
-  memberID?: Prisma.StringFieldUpdateOperationsInput | string
+  memberId?: Prisma.StringFieldUpdateOperationsInput | string
   slotId?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.EnumBookingStatusFieldUpdateOperationsInput | $Enums.BookingStatus
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
@@ -794,7 +794,7 @@ export type BookingUncheckedUpdateManyWithoutMemberInput = {
 
 export type BookingCreateManySlotInput = {
   id?: string
-  memberID: string
+  memberId: string
   status?: $Enums.BookingStatus
   idempotencyKey: string
   createdAt?: Date | string
@@ -815,7 +815,7 @@ export type BookingUpdateWithoutSlotInput = {
 
 export type BookingUncheckedUpdateWithoutSlotInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
-  memberID?: Prisma.StringFieldUpdateOperationsInput | string
+  memberId?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.EnumBookingStatusFieldUpdateOperationsInput | $Enums.BookingStatus
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -825,7 +825,7 @@ export type BookingUncheckedUpdateWithoutSlotInput = {
 
 export type BookingUncheckedUpdateManyWithoutSlotInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
-  memberID?: Prisma.StringFieldUpdateOperationsInput | string
+  memberId?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.EnumBookingStatusFieldUpdateOperationsInput | $Enums.BookingStatus
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -838,7 +838,7 @@ export type BookingUncheckedUpdateManyWithoutSlotInput = {
 export type BookingSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
   id?: boolean
   organizationId?: boolean
-  memberID?: boolean
+  memberId?: boolean
   slotId?: boolean
   status?: boolean
   idempotencyKey?: boolean
@@ -853,7 +853,7 @@ export type BookingSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs 
 export type BookingSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
   id?: boolean
   organizationId?: boolean
-  memberID?: boolean
+  memberId?: boolean
   slotId?: boolean
   status?: boolean
   idempotencyKey?: boolean
@@ -868,7 +868,7 @@ export type BookingSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Exten
 export type BookingSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
   id?: boolean
   organizationId?: boolean
-  memberID?: boolean
+  memberId?: boolean
   slotId?: boolean
   status?: boolean
   idempotencyKey?: boolean
@@ -883,7 +883,7 @@ export type BookingSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Exten
 export type BookingSelectScalar = {
   id?: boolean
   organizationId?: boolean
-  memberID?: boolean
+  memberId?: boolean
   slotId?: boolean
   status?: boolean
   idempotencyKey?: boolean
@@ -892,7 +892,7 @@ export type BookingSelectScalar = {
   cancelledAt?: boolean
 }
 
-export type BookingOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "organizationId" | "memberID" | "slotId" | "status" | "idempotencyKey" | "createdAt" | "updatedAt" | "cancelledAt", ExtArgs["result"]["booking"]>
+export type BookingOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "organizationId" | "memberId" | "slotId" | "status" | "idempotencyKey" | "createdAt" | "updatedAt" | "cancelledAt", ExtArgs["result"]["booking"]>
 export type BookingInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   organization?: boolean | Prisma.OrganizationDefaultArgs<ExtArgs>
   member?: boolean | Prisma.OrganizationUserDefaultArgs<ExtArgs>
@@ -919,7 +919,7 @@ export type $BookingPayload<ExtArgs extends runtime.Types.Extensions.InternalArg
   scalars: runtime.Types.Extensions.GetPayloadResult<{
     id: string
     organizationId: string
-    memberID: string
+    memberId: string
     slotId: string
     status: $Enums.BookingStatus
     idempotencyKey: string
@@ -1354,7 +1354,7 @@ export interface Prisma__BookingClient<T, Null = never, ExtArgs extends runtime.
 export interface BookingFieldRefs {
   readonly id: Prisma.FieldRef<"Booking", 'String'>
   readonly organizationId: Prisma.FieldRef<"Booking", 'String'>
-  readonly memberID: Prisma.FieldRef<"Booking", 'String'>
+  readonly memberId: Prisma.FieldRef<"Booking", 'String'>
   readonly slotId: Prisma.FieldRef<"Booking", 'String'>
   readonly status: Prisma.FieldRef<"Booking", 'BookingStatus'>
   readonly idempotencyKey: Prisma.FieldRef<"Booking", 'String'>

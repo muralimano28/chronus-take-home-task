@@ -13,6 +13,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d chronus_db"]
       interval: 5s
@@ -41,7 +42,7 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       args:
-        - VITE_API_URL=http://localhost:3010
+        - VITE_API_URL=http://localhost:3010/api/v1
     container_name: chronus-web
     ports:
       - "80:80"

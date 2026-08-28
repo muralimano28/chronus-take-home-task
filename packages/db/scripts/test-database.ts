@@ -94,7 +94,7 @@ async function testDatabase() {
     const booking = await prisma.booking.create({
       data: {
         organizationId: org.id,
-        memberID: orgMember.id,
+        memberId: orgMember.id,
         slotId: slot.id,
         idempotencyKey: `key-${timestamp}`,
       },

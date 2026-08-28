@@ -17,7 +17,7 @@ router.get("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =>
     const bookings = await prisma.booking.findMany({
       where: {
         organizationId,
-        memberID: membershipId,
+        memberId: membershipId,
       },
       include: {
         slot: {
@@ -88,43 +88,45 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
     return;
   }
 
-  try {
-    // 2. Check for existing booking (Idempotency Check)
-    const existingBooking = await prisma.booking.findUnique({
-      where: {
-        organizationId_memberID_idempotencyKey: {
-          organizationId,
-          memberID: membershipId,
-          idempotencyKey,
-        },
+  const getReplayedBooking = () => prisma.booking.findUnique({
+    where: {
+      organizationId_memberId_idempotencyKey: {
+        organizationId,
+        memberId: membershipId,
+        idempotencyKey,
       },
-      include: {
-        member: {
-          include: {
-            user: {
-              select: {
-                name: true,
-                email: true,
-              },
+    },
+    include: {
+      member: {
+        include: {
+          user: {
+            select: {
+              name: true,
+              email: true,
             },
           },
         },
-        slot: {
-          include: {
-            mentor: {
-              include: {
-                user: {
-                  select: {
-                    name: true,
-                    email: true,
-                  },
+      },
+      slot: {
+        include: {
+          mentor: {
+            include: {
+              user: {
+                select: {
+                  name: true,
+                  email: true,
                 },
               },
             },
           },
         },
       },
-    });
+    },
+  });
+
+  try {
+    // 2. Check for existing booking (Idempotency Check)
+    const existingBooking = await getReplayedBooking();
 
     if (existingBooking) {
       res.setHeader("x-idempotent-replayed", "true");
@@ -158,6 +160,24 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
       return;
     }
 
+    // Business Rule: A member cannot book overlapping slots
+    const overlappingBooking = await prisma.booking.findFirst({
+      where: {
+        organizationId,
+        memberId: membershipId,
+        status: "ACTIVE",
+        slot: {
+          startTime: { lt: slot.endTime },
+          endTime: { gt: slot.startTime },
+        },
+      },
+    });
+
+    if (overlappingBooking) {
+      res.status(400).json({ error: "You already have a booking that overlaps with this slot's time." });
+      return;
+    }
+
     // 4. Concurrency-safe Slot Reservation and Booking Creation
     const newBooking = await prisma.$transaction(async (tx) => {
       // Atomically update the slot status to BOOKED
@@ -178,7 +198,7 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
       const booking = await tx.booking.create({
         data: {
           organizationId,
-          memberID: membershipId,
+          memberId: membershipId,
           slotId,
           status: "ACTIVE",
           idempotencyKey,
@@ -216,15 +236,26 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
 
     res.status(201).json(formatBookingResponse(newBooking));
   } catch (error: any) {
-    // Handle Prisma duplicate/conflict errors
     if (error && typeof error === "object") {
-      // P2002: Unique constraint failed (e.g. slotId already has an ACTIVE booking)
-      // P2025: Record to update not found (e.g. status was not AVAILABLE in update where clause)
+      // P2002: Unique constraint failed, P2025: Record to update not found (status was not AVAILABLE)
       if (error.code === "P2002" || error.code === "P2025") {
+        try {
+          const replayedBooking = await getReplayedBooking();
+          if (replayedBooking) {
+            res.setHeader("x-idempotent-replayed", "true");
+            res.status(200).json(formatBookingResponse(replayedBooking));
+            return;
+          }
+        } catch (fetchError) {
+          console.error("[Bookings Route Error] Failed to fetch replayed booking:", fetchError);
+        }
+
+        // If no replayed booking exists, it's a conflict
         res.status(409).json({ error: "Slot is no longer available or has already been booked." });
         return;
       }
     }
+
     console.error(`[Bookings Route Error] Failed to create booking for member ${membershipId} in org ${organizationId}:`, error);
     res.status(500).json({ error: "Internal server error." });
   }
@@ -238,13 +269,11 @@ function formatBookingResponse(b: any) {
     idempotencyKey: b.idempotencyKey,
     createdAt: b.createdAt,
     updatedAt: b.updatedAt,
-    member: b.member ? {
+    member: {
       membershipId: b.member.id,
       userId: b.member.userId,
       name: b.member.user?.name,
       email: b.member.user?.email,
-    } : {
-      membershipId: b.memberID,
     },
     slot: {
       id: b.slot.id,

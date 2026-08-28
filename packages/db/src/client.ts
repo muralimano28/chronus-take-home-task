@@ -1,4 +1,7 @@
-import "dotenv/config";
+if (!process.env.DATABASE_URL) {
+  require("dotenv").config();
+}
+
 import { PrismaClient } from "./generated/prisma/client";
 
 //Prisma Driver Adapter for Postgres

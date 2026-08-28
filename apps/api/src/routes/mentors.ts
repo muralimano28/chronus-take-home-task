@@ -93,6 +93,9 @@ router.get("/:mentorId/slots", requireAuth, validateTenantAccess, async (req: Au
       where: {
         organizationId,
         mentorId,
+        startTime: {
+          gte: new Date(),
+        },
       },
       orderBy: {
         startTime: "asc",

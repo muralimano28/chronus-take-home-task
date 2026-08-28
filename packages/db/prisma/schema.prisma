@@ -86,7 +86,7 @@ enum BookingStatus {
 model Booking {
   id             String        @id @default(uuid()) @db.Uuid
   organizationId String        @db.Uuid
-  memberID       String        @db.Uuid
+  memberId       String        @db.Uuid
   slotId         String        @db.Uuid
   status         BookingStatus @default(ACTIVE)
   idempotencyKey String        @db.VarChar(100)
@@ -96,10 +96,10 @@ model Booking {
   cancelledAt DateTime?
 
   organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  member         OrganizationUser @relation(fields: [organizationId, memberID], references: [organizationId, id], onDelete: NoAction)
+  member         OrganizationUser @relation(fields: [organizationId, memberId], references: [organizationId, id], onDelete: NoAction)
   slot           MentorSlot       @relation("BookingSlot", fields: [organizationId, slotId], references: [organizationId, id], onDelete: NoAction)
 
   @@unique([slotId], where: { status: "ACTIVE" }) // This restricts only 1 active booking for a slot
-  @@unique([organizationId, memberID, idempotencyKey]) // This ensures that idempotency key is unique for each organization and member
+  @@unique([organizationId, memberId, idempotencyKey]) // This ensures that idempotency key is unique for each organization and member
 }
 

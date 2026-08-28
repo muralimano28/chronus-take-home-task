@@ -4,8 +4,10 @@ import { prisma } from "@chronus/db";
 
 import { isValidUuid } from "../utils/validation";
 
+import { env } from "../config/env";
+ 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET!;
+const JWT_SECRET = env.JWT_SECRET;
 
 /**
  * POST /auth/login
@@ -71,7 +73,7 @@ router.post("/login", async (req, res) => {
     // Set cookie with security best practices
     res.cookie("token", token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: env.NODE_ENV === "production",
       sameSite: "lax",
       maxAge: 24 * 60 * 60 * 1000, // 1 day
     });
@@ -102,7 +104,7 @@ router.post("/login", async (req, res) => {
 router.post("/logout", (req, res) => {
   res.clearCookie("token", {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: env.NODE_ENV === "production",
     sameSite: "lax",
   });
   res.status(200).json({ message: "Logout successful" });

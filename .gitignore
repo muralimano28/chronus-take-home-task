@@ -21,8 +21,11 @@ lerna-debug.log*
 # Environment variables
 .env
 .env.local
+.env.development
 .env.development.local
+.env.test
 .env.test.local
+.env.production
 .env.production.local
 *.env
 
@@ -41,3 +44,6 @@ Thumbs.db
 
 # Docker
 .docker/
+
+# Local Usage Files
+gpt-responses/

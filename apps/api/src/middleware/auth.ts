@@ -2,7 +2,9 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { prisma } from "@chronus/db";
 
-const JWT_SECRET = process.env.JWT_SECRET!;
+import { env } from "../config/env";
+ 
+const JWT_SECRET = env.JWT_SECRET;
 
 export interface AuthPayload {
   membershipId: string;
@@ -66,6 +68,11 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
       return;
     }
 
+    // SECURITY NOTE: We trust only 'membershipId' and 'organizationId' from the JWT payload.
+    // Relying on mutable state inside the JWT (like 'isMentor' or user details) presents a security risk
+    // if privileges are revoked or updated. The database remains the single source of truth.
+    // For simplicity, we assign the payload to req.user for now, but any critical logic 
+    // must query/verify states directly from the database membership record.
     req.user = payload;
     next();
   } catch (error) {

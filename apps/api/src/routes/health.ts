@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "@chronus/db";
+import { env } from "../config/env";
 
 const router = Router();
 
@@ -8,7 +9,7 @@ const router = Router();
  * Diagnostic health check endpoint to check API status and database connectivity.
  */
 router.get("/", async (req, res) => {
-  const databaseUrl = process.env.DATABASE_URL;
+  const databaseUrl = env.DATABASE_URL;
   let dbStatus = "unknown";
 
   if (databaseUrl) {
