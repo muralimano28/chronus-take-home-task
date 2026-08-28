@@ -126,3 +126,9 @@ Why: In high-concurrency environments, multiple requests with the identical idem
 
 Decision 25 — Filtering Past Availability Slots
 Why: A mentor's availability list must not expose historical or expired slots. Enforcing a filter at the database query level (`startTime >= now`) ensures that members only view and book future slots, reducing API payload sizes and preventing stale booking requests.
+
+Decision 26 — Booking Identity Preservation on Reschedule
+Why: Rescheduling does not create a new booking record. Instead, the `slotId` of the existing booking is updated in place. The booking ID represents the customer's overall appointment ticket, while the slotId represents its scheduled time and mentor. Keeping the same booking ID allows clients to track the appointment's history and avoids generating new IDs or creating orphaned records.
+
+Decision 27 — Preventing Past Bookings and Rescheduling
+Why: The system must enforce that slot reservations (for new bookings or rescheduled ones) occur in the future. Enforcing this logic at the API controller boundary prevents scheduling discrepancies, calendar history corruption, and logical conflicts resulting from past session assignments.
