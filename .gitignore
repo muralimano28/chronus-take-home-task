@@ -47,3 +47,7 @@ Thumbs.db
 
 # Local Usage Files
 gpt-responses/
+NOTES.md
+
+# Generated Prisma files
+packages/db/src/generated/
