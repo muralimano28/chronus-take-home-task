@@ -2,6 +2,7 @@ import { Response, Router } from "express";
 import { prisma } from "@chronus/db";
 import { requireAuth, AuthenticatedRequest } from "../middleware/auth";
 import { isValidUuid } from "../utils/validation";
+import { runIdempotent } from "../services/idempotency";
 
 const router = Router();
 
@@ -44,7 +45,6 @@ router.get("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =>
     const formattedBookings = bookings.map((b) => ({
       id: b.id,
       status: b.status,
-      idempotencyKey: b.idempotencyKey,
       createdAt: b.createdAt,
       updatedAt: b.updatedAt,
       slot: {
@@ -88,179 +88,143 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
     return;
   }
 
-  const getReplayedBooking = () => prisma.booking.findUnique({
-    where: {
-      organizationId_memberId_idempotencyKey: {
-        organizationId,
-        memberId: membershipId,
-        idempotencyKey,
-      },
-    },
-    include: {
-      member: {
-        include: {
-          user: {
-            select: {
-              name: true,
-              email: true,
-            },
-          },
-        },
-      },
-      slot: {
-        include: {
-          mentor: {
-            include: {
-              user: {
-                select: {
-                  name: true,
-                  email: true,
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  });
-
   try {
-    // 2. Check for existing booking (Idempotency Check)
-    const existingBooking = await getReplayedBooking();
+    const result = await runIdempotent({
+      organizationId,
+      action: "create_booking",
+      idempotencyKey,
+      payload: { slotId },
+      handler: async (tx) => {
+        // Concurrency lock: Acquire pessimistic lock on the booking member's OrganizationUser row
+        // to prevent concurrent overlap check bypass.
+        await tx.$executeRaw`SELECT 1 FROM "OrganizationUser" WHERE id = ${membershipId}::uuid FOR UPDATE`;
 
-    if (existingBooking) {
-      if (existingBooking.slotId !== slotId) {
-        res.status(400).json({ error: "Idempotency key was already used with a different slotId." });
-        return;
-      }
-      res.setHeader("x-idempotent-replayed", "true");
-      res.status(200).json(formatBookingResponse(existingBooking));
-      return;
-    }
+        // 1. Fetch the slot to verify existence and business rules
+        const slot = await tx.mentorSlot.findUnique({
+          where: {
+            organizationId_id: {
+              id: slotId,
+              organizationId,
+            },
+          },
+        });
 
-    // 3. Fetch the slot to verify existence and business rules
-    const slot = await prisma.mentorSlot.findUnique({
-      where: {
-        organizationId_id: {
-          id: slotId,
-          organizationId,
-        },
-      },
-    });
+        if (!slot) {
+          const err: any = new Error("Slot not found in your organization.");
+          err.statusCode = 404;
+          throw err;
+        }
 
-    if (!slot) {
-      res.status(404).json({ error: "Slot not found in your organization." });
-      return;
-    }
+        if (slot.status !== "AVAILABLE") {
+          const err: any = new Error("Slot is no longer available or has already been booked.");
+          err.statusCode = 409;
+          throw err;
+        }
 
-    if (slot.status !== "AVAILABLE") {
-      res.status(409).json({ error: "Slot is no longer available or has already been booked." });
-      return;
-    }
+        // Business Rule: Cannot book a slot in the past
+        if (slot.startTime < new Date()) {
+          const err: any = new Error("Cannot book a slot in the past.");
+          err.statusCode = 400;
+          throw err;
+        }
 
-    // Business Rule: Cannot book a slot in the past
-    if (slot.startTime < new Date()) {
-      res.status(400).json({ error: "Cannot book a slot in the past." });
-      return;
-    }
+        // Business Rule: Mentors cannot book their own slots
+        if (slot.mentorId === membershipId) {
+          const err: any = new Error("Access denied. You cannot book your own mentor slot.");
+          err.statusCode = 400;
+          throw err;
+        }
 
-    // Business Rule: Mentors cannot book their own slots
-    if (slot.mentorId === membershipId) {
-      res.status(400).json({ error: "Access denied. You cannot book your own mentor slot." });
-      return;
-    }
+        // Business Rule: A member cannot book overlapping slots
+        const overlappingBooking = await tx.booking.findFirst({
+          where: {
+            organizationId,
+            memberId: membershipId,
+            status: "ACTIVE",
+            slot: {
+              startTime: { lt: slot.endTime },
+              endTime: { gt: slot.startTime },
+            },
+          },
+        });
 
-    // Business Rule: A member cannot book overlapping slots
-    const overlappingBooking = await prisma.booking.findFirst({
-      where: {
-        organizationId,
-        memberId: membershipId,
-        status: "ACTIVE",
-        slot: {
-          startTime: { lt: slot.endTime },
-          endTime: { gt: slot.startTime },
-        },
-      },
-    });
+        if (overlappingBooking) {
+          const err: any = new Error("You already have a booking that overlaps with this slot's time.");
+          err.statusCode = 400;
+          throw err;
+        }
 
-    if (overlappingBooking) {
-      res.status(400).json({ error: "You already have a booking that overlaps with this slot's time." });
-      return;
-    }
+        // 2. Reserve slot (optimistic concurrency update)
+        await tx.mentorSlot.update({
+          where: {
+            id: slotId,
+            organizationId,
+            status: "AVAILABLE",
+          },
+          data: {
+            status: "BOOKED",
+          },
+        });
 
-    // 4. Concurrency-safe Slot Reservation and Booking Creation
-    const newBooking = await prisma.$transaction(async (tx) => {
-      // Atomically update the slot status to BOOKED
-      // (This will fail if another transaction changed the status to BOOKED concurrently)
-      // We are performing optimistic locking below
-      await tx.mentorSlot.update({
-        where: {
-          id: slotId,
-          organizationId,
-          status: "AVAILABLE",
-        },
-        data: {
-          status: "BOOKED",
-        },
-      });
-
-      // Create the booking record
-      const booking = await tx.booking.create({
-        data: {
-          organizationId,
-          memberId: membershipId,
-          slotId,
-          status: "ACTIVE",
-          idempotencyKey,
-        },
-        include: {
-          member: {
-            include: {
-              user: {
-                select: {
-                  name: true,
-                  email: true,
+        // 3. Create booking record
+        const booking = await tx.booking.create({
+          data: {
+            organizationId,
+            memberId: membershipId,
+            slotId,
+            status: "ACTIVE",
+          },
+          include: {
+            member: {
+              include: {
+                user: {
+                  select: {
+                    name: true,
+                    email: true,
+                  },
                 },
               },
             },
-          },
-          slot: {
-            include: {
-              mentor: {
-                include: {
-                  user: {
-                    select: {
-                      name: true,
-                      email: true,
+            slot: {
+              include: {
+                mentor: {
+                  include: {
+                    user: {
+                      select: {
+                        name: true,
+                        email: true,
+                      },
                     },
                   },
                 },
               },
             },
           },
-        },
-      });
+        });
 
-      return booking;
+        return {
+          statusCode: 201,
+          body: formatBookingResponse(booking),
+        };
+      },
     });
 
-    res.status(201).json(formatBookingResponse(newBooking));
+    if (result.replayed) {
+      res.setHeader("x-idempotent-replayed", "true");
+      res.status(200).json(result.body);
+    } else {
+      res.status(result.statusCode).json(result.body);
+    }
   } catch (error: any) {
     if (error && typeof error === "object") {
-      // P2002: Unique constraint failed, P2025: Record to update not found (status was not AVAILABLE)
-      if (error.code === "P2002" || error.code === "P2025") {
-        try {
-          const replayedBooking = await getReplayedBooking();
-          if (replayedBooking) {
-            res.setHeader("x-idempotent-replayed", "true");
-            res.status(200).json(formatBookingResponse(replayedBooking));
-            return;
-          }
-        } catch (fetchError) {
-          console.error("[Bookings Route Error] Failed to fetch replayed booking:", fetchError);
-        }
+      // If our handler threw a validation/existence error with a status code
+      if (typeof error.statusCode === "number") {
+        res.status(error.statusCode).json({ error: error.message });
+        return;
+      }
 
-        // If no replayed booking exists, it's a conflict
+      // Prisma optimistic locking error: P2025 (record to update not found because status !== AVAILABLE)
+      if (error.code === "P2025" || error.code === "P2002") {
         res.status(409).json({ error: "Slot is no longer available or has already been booked." });
         return;
       }
@@ -284,26 +248,23 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
     return;
   }
 
+  // Use client-provided key if available; otherwise, derive one from the bookingId to ensure safety
+  const idempotencyKey = req.get("Idempotency-Key") || `cancel-booking-${bookingId}`;
+
   try {
-    // 1. Fetch booking to check ownership, organization, status, and fetch slotId
-    const booking = await prisma.booking.findUnique({
-      where: {
-        id: bookingId,
-      },
-      include: {
-        member: {
-          include: {
-            user: {
-              select: {
-                name: true,
-                email: true,
-              },
-            },
+    const result = await runIdempotent({
+      organizationId,
+      action: "cancel_booking",
+      idempotencyKey,
+      payload: { bookingId },
+      handler: async (tx) => {
+        // 1. Fetch booking to check ownership, organization, status, and fetch slotId
+        const booking = await tx.booking.findUnique({
+          where: {
+            id: bookingId,
           },
-        },
-        slot: {
           include: {
-            mentor: {
+            member: {
               include: {
                 user: {
                   select: {
@@ -313,87 +274,115 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
                 },
               },
             },
-          },
-        },
-      },
-    });
-
-    // Enforce tenant isolation and ownership check:
-    // User must belong to the same organization and must be the member who booked it.
-    if (!booking || booking.organizationId !== organizationId || booking.memberId !== membershipId) {
-      res.status(404).json({ error: "Booking not found." });
-      return;
-    }
-
-    // 2. If already cancelled, return 200 OK (idempotent no-op)
-    if (booking.status === "CANCELLED") {
-      res.status(200).json(formatBookingResponse(booking));
-      return;
-    }
-
-    // Business Rule: Cannot cancel a booking for a slot that has already started/is in the past
-    if (booking.slot.startTime < new Date()) {
-      res.status(400).json({ error: "Cannot cancel a booking for a slot in the past." });
-      return;
-    }
-
-    // 3. Process cancellation within a transaction
-    const updatedBooking = await prisma.$transaction(async (tx) => {
-      // Free up the slot
-      await tx.mentorSlot.update({
-        where: {
-          organizationId_id: {
-            organizationId,
-            id: booking.slotId,
-          },
-        },
-        data: {
-          status: "AVAILABLE",
-        },
-      });
-
-      // Mark the booking as cancelled
-      const cancelledBooking = await tx.booking.update({
-        where: {
-          id: bookingId,
-        },
-        data: {
-          status: "CANCELLED",
-          cancelledAt: new Date(),
-        },
-        include: {
-          member: {
-            include: {
-              user: {
-                select: {
-                  name: true,
-                  email: true,
-                },
-              },
-            },
-          },
-          slot: {
-            include: {
-              mentor: {
-                include: {
-                  user: {
-                    select: {
-                      name: true,
-                      email: true,
+            slot: {
+              include: {
+                mentor: {
+                  include: {
+                    user: {
+                      select: {
+                        name: true,
+                        email: true,
+                      },
                     },
                   },
                 },
               },
             },
           },
-        },
-      });
+        });
 
-      return cancelledBooking;
+        // Enforce tenant isolation and ownership check:
+        // User must belong to the same organization and must be the member who booked it.
+        if (!booking || booking.organizationId !== organizationId || booking.memberId !== membershipId) {
+          const err: any = new Error("Booking not found.");
+          err.statusCode = 404;
+          throw err;
+        }
+
+        // 2. If already cancelled, return 200 OK (idempotent no-op)
+        if (booking.status === "CANCELLED") {
+          return {
+            statusCode: 200,
+            body: formatBookingResponse(booking),
+          };
+        }
+
+        // Business Rule: Cannot cancel a booking for a slot that has already started/is in the past
+        if (booking.slot.startTime < new Date()) {
+          const err: any = new Error("Cannot cancel a booking for a slot in the past.");
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // Free up the slot
+        await tx.mentorSlot.update({
+          where: {
+            organizationId_id: {
+              organizationId,
+              id: booking.slotId,
+            },
+          },
+          data: {
+            status: "AVAILABLE",
+          },
+        });
+
+        // Mark the booking as cancelled
+        const cancelledBooking = await tx.booking.update({
+          where: {
+            id: bookingId,
+          },
+          data: {
+            status: "CANCELLED",
+            cancelledAt: new Date(),
+          },
+          include: {
+            member: {
+              include: {
+                user: {
+                  select: {
+                    name: true,
+                    email: true,
+                  },
+                },
+              },
+            },
+            slot: {
+              include: {
+                mentor: {
+                  include: {
+                    user: {
+                      select: {
+                        name: true,
+                        email: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        });
+
+        return {
+          statusCode: 200,
+          body: formatBookingResponse(cancelledBooking),
+        };
+      },
     });
 
-    res.status(200).json(formatBookingResponse(updatedBooking));
-  } catch (error) {
+    if (result.replayed) {
+      res.setHeader("x-idempotent-replayed", "true");
+      res.status(200).json(result.body);
+    } else {
+      res.status(result.statusCode).json(result.body);
+    }
+  } catch (error: any) {
+    if (error && typeof error === "object" && typeof error.statusCode === "number") {
+      res.status(error.statusCode).json({ error: error.message });
+      return;
+    }
+
     console.error(`[Bookings Route Error] Failed to cancel booking ${bookingId} for member ${membershipId} in org ${organizationId}:`, error);
     res.status(500).json({ error: "Internal server error." });
   }
@@ -407,6 +396,12 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
   const { organizationId, membershipId } = req.user!;
   const { bookingId } = req.params;
   const { newSlotId } = req.body;
+  const idempotencyKey = req.get("Idempotency-Key");
+
+  if (!idempotencyKey || typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") {
+    res.status(400).json({ error: "Missing or invalid idempotencyKey. Expected a non-empty string." });
+    return;
+  }
 
   if (!isValidUuid(bookingId) || !isValidUuid(newSlotId)) {
     res.status(400).json({ error: "Invalid bookingId or newSlotId format. Expected valid UUIDs." });
@@ -414,176 +409,184 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
   }
 
   try {
-    // 1. Fetch current booking
-    const booking = await prisma.booking.findUnique({
-      where: {
-        id: bookingId,
-      },
-    });
+    const result = await runIdempotent({
+      organizationId,
+      action: "reschedule_booking",
+      idempotencyKey,
+      payload: { bookingId, newSlotId },
+      handler: async (tx) => {
+        // Concurrency lock: Acquire pessimistic lock on the booking member's OrganizationUser row
+        // to prevent concurrent overlap check bypass.
+        await tx.$executeRaw`SELECT 1 FROM "OrganizationUser" WHERE id = ${membershipId}::uuid FOR UPDATE`;
 
-    // Enforce tenant isolation and ownership check:
-    // User must belong to the same organization and must be the member who booked it.
-    if (!booking || booking.organizationId !== organizationId || booking.memberId !== membershipId) {
-      res.status(404).json({ error: "Booking not found." });
-      return;
-    }
+        // 1. Fetch current booking
+        const booking = await tx.booking.findUnique({
+          where: { id: bookingId },
+        });
 
-    if (booking.status !== "ACTIVE") {
-      res.status(400).json({ error: "Only active bookings can be rescheduled." });
-      return;
-    }
+        // Enforce tenant isolation and ownership check:
+        if (!booking || booking.organizationId !== organizationId || booking.memberId !== membershipId) {
+          const err: any = new Error("Booking not found.");
+          err.statusCode = 404;
+          throw err;
+        }
 
-    // If new slot is the same as old slot, it's a no-op
-    if (booking.slotId === newSlotId) {
-      // Re-fetch with full relations to return formatted response
-      const fullBooking = await prisma.booking.findUnique({
-        where: { id: bookingId },
-        include: {
-          member: {
+        if (booking.status !== "ACTIVE") {
+          const err: any = new Error("Only active bookings can be rescheduled.");
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // If new slot is the same as old slot, it's a no-op
+        if (booking.slotId === newSlotId) {
+          const fullBooking = await tx.booking.findUnique({
+            where: { id: bookingId },
             include: {
-              user: {
-                select: { name: true, email: true },
-              },
-            },
-          },
-          slot: {
-            include: {
-              mentor: {
+              member: {
                 include: {
-                  user: {
-                    select: { name: true, email: true },
-                  },
+                  user: { select: { name: true, email: true } },
                 },
               },
-            },
-          },
-        },
-      });
-      res.status(200).json(formatBookingResponse(fullBooking));
-      return;
-    }
-
-    // 2. Fetch new slot
-    const newSlot = await prisma.mentorSlot.findUnique({
-      where: {
-        organizationId_id: {
-          organizationId,
-          id: newSlotId,
-        },
-      },
-    });
-
-    if (!newSlot) {
-      res.status(400).json({ error: "New slot not found in your organization." });
-      return;
-    }
-
-    if (newSlot.status !== "AVAILABLE") {
-      res.status(409).json({ error: "New slot is already booked." });
-      return;
-    }
-
-    // Business Rule: Cannot reschedule to a slot in the past
-    if (newSlot.startTime < new Date()) {
-      res.status(400).json({ error: "Cannot reschedule to a slot in the past." });
-      return;
-    }
-
-    // Business Rule: Mentors cannot book/reschedule to their own slots
-    if (newSlot.mentorId === membershipId) {
-      res.status(400).json({ error: "Access denied. You cannot book your own mentor slot." });
-      return;
-    }
-
-    // Business Rule: A member cannot book overlapping slots (excluding the booking currently being rescheduled)
-    const overlappingBooking = await prisma.booking.findFirst({
-      where: {
-        organizationId,
-        memberId: membershipId,
-        status: "ACTIVE",
-        id: { not: bookingId }, // Exclude the current booking being moved
-        slot: {
-          startTime: { lt: newSlot.endTime },
-          endTime: { gt: newSlot.startTime },
-        },
-      },
-    });
-
-    if (overlappingBooking) {
-      res.status(400).json({ error: "You already have a booking that overlaps with the new slot's time." });
-      return;
-    }
-
-    // 3. Process reschedule inside a transaction
-    const updatedBooking = await prisma.$transaction(async (tx) => {
-      // Free up old slot
-      await tx.mentorSlot.update({
-        where: {
-          organizationId_id: {
-            organizationId,
-            id: booking.slotId,
-          },
-        },
-        data: {
-          status: "AVAILABLE",
-        },
-      });
-
-      // Reserve new slot (optimistic locking checks status: AVAILABLE)
-      await tx.mentorSlot.update({
-        where: {
-          id: newSlotId,
-          organizationId,
-          status: "AVAILABLE",
-        },
-        data: {
-          status: "BOOKED",
-        },
-      });
-
-      // Update slot ID on the existing booking
-      const bookingRecord = await tx.booking.update({
-        where: {
-          id: bookingId,
-        },
-        data: {
-          slotId: newSlotId,
-        },
-        include: {
-          member: {
-            include: {
-              user: {
-                select: {
-                  name: true,
-                  email: true,
-                },
-              },
-            },
-          },
-          slot: {
-            include: {
-              mentor: {
+              slot: {
                 include: {
-                  user: {
-                    select: {
-                      name: true,
-                      email: true,
+                  mentor: {
+                    include: {
+                      user: { select: { name: true, email: true } },
                     },
                   },
                 },
               },
             },
-          },
-        },
-      });
+          });
+          return {
+            statusCode: 200,
+            body: formatBookingResponse(fullBooking),
+          };
+        }
 
-      return bookingRecord;
+        // 2. Fetch new slot
+        const newSlot = await tx.mentorSlot.findUnique({
+          where: {
+            organizationId_id: {
+              organizationId,
+              id: newSlotId,
+            },
+          },
+        });
+
+        if (!newSlot) {
+          const err: any = new Error("New slot not found in your organization.");
+          err.statusCode = 400;
+          throw err;
+        }
+
+        if (newSlot.status !== "AVAILABLE") {
+          const err: any = new Error("New slot is already booked.");
+          err.statusCode = 409;
+          throw err;
+        }
+
+        // Business Rule: Cannot reschedule to a slot in the past
+        if (newSlot.startTime < new Date()) {
+          const err: any = new Error("Cannot reschedule to a slot in the past.");
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // Business Rule: Mentors cannot book/reschedule to their own slots
+        if (newSlot.mentorId === membershipId) {
+          const err: any = new Error("Access denied. You cannot book your own mentor slot.");
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // Business Rule: A member cannot book overlapping slots (excluding the booking currently being rescheduled)
+        const overlappingBooking = await tx.booking.findFirst({
+          where: {
+            organizationId,
+            memberId: membershipId,
+            status: "ACTIVE",
+            id: { not: bookingId }, // Exclude the current booking being moved
+            slot: {
+              startTime: { lt: newSlot.endTime },
+              endTime: { gt: newSlot.startTime },
+            },
+          },
+        });
+
+        if (overlappingBooking) {
+          const err: any = new Error("You already have a booking that overlaps with the new slot's time.");
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // Free up old slot
+        await tx.mentorSlot.update({
+          where: {
+            organizationId_id: {
+              organizationId,
+              id: booking.slotId,
+            },
+          },
+          data: {
+            status: "AVAILABLE",
+          },
+        });
+
+        // Reserve new slot (optimistic locking checks status: AVAILABLE)
+        await tx.mentorSlot.update({
+          where: {
+            id: newSlotId,
+            organizationId,
+            status: "AVAILABLE",
+          },
+          data: {
+            status: "BOOKED",
+          },
+        });
+
+        // Update slot ID on the existing booking
+        const bookingRecord = await tx.booking.update({
+          where: { id: bookingId },
+          data: { slotId: newSlotId },
+          include: {
+            member: {
+              include: {
+                user: { select: { name: true, email: true } },
+              },
+            },
+            slot: {
+              include: {
+                mentor: {
+                  include: {
+                    user: { select: { name: true, email: true } },
+                  },
+                },
+              },
+            },
+          },
+        });
+
+        return {
+          statusCode: 200,
+          body: formatBookingResponse(bookingRecord),
+        };
+      },
     });
 
-    res.status(200).json(formatBookingResponse(updatedBooking));
+    if (result.replayed) {
+      res.setHeader("x-idempotent-replayed", "true");
+      res.status(200).json(result.body);
+    } else {
+      res.status(result.statusCode).json(result.body);
+    }
   } catch (error: any) {
     if (error && typeof error === "object") {
-      // Record not found during newSlot status AVAILABLE condition check
+      if (error.statusCode) {
+        res.status(error.statusCode).json({ error: error.message });
+        return;
+      }
+      // Record not found during optimistic lock constraint check
       if (error.code === "P2025" || error.code === "P2002") {
         res.status(409).json({ error: "New slot is no longer available." });
         return;
@@ -601,7 +604,6 @@ function formatBookingResponse(b: any) {
   return {
     id: b.id,
     status: b.status,
-    idempotencyKey: b.idempotencyKey,
     createdAt: b.createdAt,
     updatedAt: b.updatedAt,
     member: {

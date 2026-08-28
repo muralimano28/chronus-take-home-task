@@ -132,3 +132,6 @@ Why: Rescheduling does not create a new booking record. Instead, the `slotId` of
 
 Decision 27 — Preventing Past Bookings and Rescheduling
 Why: The system must enforce that slot reservations (for new bookings or rescheduled ones) occur in the future. Enforcing this logic at the API controller boundary prevents scheduling discrepancies, calendar history corruption, and logical conflicts resulting from past session assignments.
+
+Decision 28 — Pessimistic Row Locking for Overlap Prevention (SELECT FOR UPDATE)
+Why: To prevent concurrent overlap check bypasses (where a single member books multiple overlapping slots at the same time), we lock the member's `OrganizationUser` row using `SELECT ... FOR UPDATE` at the beginning of the transaction. Although this is a simple and reliable solution for now, it can lead to connection pool saturation or increased queue latency during high-traffic periods. We plan to migrate to a Redis-based distributed lock as the scheduling flow is enhanced.

@@ -15,9 +15,10 @@ model Organization {
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
 
-  users       OrganizationUser[]
-  mentorSlots MentorSlot[]
-  bookings    Booking[]
+  users           OrganizationUser[]
+  mentorSlots     MentorSlot[]
+  bookings        Booking[]
+  idempotencyKeys IdempotencyKey[]
 }
 
 model User {
@@ -89,7 +90,6 @@ model Booking {
   memberId       String        @db.Uuid
   slotId         String        @db.Uuid
   status         BookingStatus @default(ACTIVE)
-  idempotencyKey String        @db.VarChar(100)
 
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
@@ -100,6 +100,31 @@ model Booking {
   slot           MentorSlot       @relation("BookingSlot", fields: [organizationId, slotId], references: [organizationId, id], onDelete: NoAction)
 
   @@unique([slotId], where: { status: "ACTIVE" }) // This restricts only 1 active booking for a slot
-  @@unique([organizationId, memberId, idempotencyKey]) // This ensures that idempotency key is unique for each organization and member
 }
 
+enum IdempotencyStatus {
+  STARTED
+  COMPLETED
+  FAILED
+}
+
+model IdempotencyKey {
+  id              String            @id @default(uuid()) @db.Uuid
+  organizationId  String            @db.Uuid
+  action          String            @db.VarChar(100)
+  idempotencyKey  String            @db.VarChar(255)
+  requestHash     String            @db.Char(64)
+  status          IdempotencyStatus @default(STARTED)
+  responseCode    Int?              @db.SmallInt
+  responseBody    Json?
+
+  lockedAt        DateTime          @default(now()) @db.Timestamptz
+  updatedAt       DateTime          @default(now()) @updatedAt @db.Timestamptz
+
+
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Critical for preventing race conditions across concurrent servers
+  @@unique([organizationId, action, idempotencyKey], name: "uniqueTenantActionKey")
+  @@index([organizationId, idempotencyKey])
+}

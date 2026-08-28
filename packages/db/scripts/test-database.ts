@@ -96,7 +96,6 @@ async function testDatabase() {
         organizationId: org.id,
         memberId: orgMember.id,
         slotId: slot.id,
-        idempotencyKey: `key-${timestamp}`,
       },
     });
     bookingId = booking.id;
