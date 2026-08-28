@@ -135,3 +135,6 @@ Why: The system must enforce that slot reservations (for new bookings or resched
 
 Decision 28 — Pessimistic Row Locking for Overlap Prevention (SELECT FOR UPDATE)
 Why: To prevent concurrent overlap check bypasses (where a single member books multiple overlapping slots at the same time), we lock the member's `OrganizationUser` row using `SELECT ... FOR UPDATE` at the beginning of the transaction. Although this is a simple and reliable solution for now, it can lead to connection pool saturation or increased queue latency during high-traffic periods. We plan to migrate to a Redis-based distributed lock as the scheduling flow is enhanced.
+
+Decision 29 — Shared UI package and Tailwind CSS v4 setup
+Why: Creating a shared @chronus/ui package with Tailwind CSS v4 and the official @tailwindcss/vite plugin ensures high-performance compilation, clean monorepo architecture, and standard, reusable shadcn components that can be used across multiple frontend applications.
