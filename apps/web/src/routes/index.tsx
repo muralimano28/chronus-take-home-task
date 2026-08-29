@@ -15,6 +15,7 @@ import {
 import { ChevronDown, User, LogIn, Loader2, AlertCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { ThemeToggle } from "@/lib/theme-context";
 
 export const Route = createFileRoute("/")({
   component: Index,
@@ -55,7 +56,10 @@ export function HomeCard({
   error,
 }: HomeCardProps) {
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-background p-6">
+    <div className="relative min-h-screen w-full flex items-center justify-center bg-background p-6">
+      <div className="absolute top-4 right-4">
+        <ThemeToggle />
+      </div>
       <Card className="w-full max-w-md border-border bg-card">
         <CardHeader className="flex flex-col gap-2 pt-8 pb-6">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-inner">

@@ -3,6 +3,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@chronus/ui";
 import { LogOut } from "lucide-react";
 import { MentorsList } from "@/components/mentors-list";
+import { ThemeToggle } from "@/lib/theme-context";
 
 export const Route = createFileRoute("/dashboard")({
   component: Dashboard,
@@ -42,6 +43,7 @@ function Dashboard() {
             <LogOut className="h-4 w-4" />
             Log Out
           </Button>
+          <ThemeToggle />
         </div>
       </header>
       <main className="flex-1 p-8 max-w-4xl mx-auto w-full">

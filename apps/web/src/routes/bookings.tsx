@@ -11,6 +11,7 @@ import { LogOut, MoreHorizontal, Globe, ArrowLeft, Loader2, AlertCircle, Calenda
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { formatDateInTimezone, formatTimeInTimezone } from "@/lib/date-utils";
+import { ThemeToggle } from "@/lib/theme-context";
 
 export const Route = createFileRoute("/bookings")({
   component: BookingsPage,
@@ -102,6 +103,7 @@ function BookingsPage() {
             <LogOut className="h-4 w-4" />
             Log Out
           </Button>
+          <ThemeToggle />
         </div>
       </header>
 
