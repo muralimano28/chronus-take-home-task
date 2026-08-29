@@ -3,6 +3,9 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+import { createLogger } from "@chronus/logger";
+
+const logger = createLogger("redis");
 const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
 
 export const redis = new Redis(REDIS_URL, {
@@ -12,11 +15,11 @@ export const redis = new Redis(REDIS_URL, {
 });
 
 redis.on("error", (err) => {
-  console.error("[Redis Error]:", err.message);
+  logger.error(`Redis connection error: ${err.message}`, { error: err });
 });
 
 redis.on("connect", () => {
-  console.log("[Redis]: Successfully connected to Redis server");
+  logger.info("Successfully connected to Redis server");
 });
 
 export { Redis };

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@chronus/db": "workspace:*",
+    "@chronus/logger": "workspace:*",
     "@chronus/redis": "workspace:*",
     "@chronus/utils": "workspace:*",
     "cookie-parser": "^1.4.7",

@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@chronus/db": "workspace:*",
+    "@chronus/logger": "workspace:*",
     "@chronus/rabbitmq": "workspace:*",
     "@chronus/utils": "workspace:*",
     "dotenv": "^16.4.5",

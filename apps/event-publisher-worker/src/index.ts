@@ -1,7 +1,9 @@
 import { env } from "./config/env";
 import { prisma } from "@chronus/db";
 import { rabbitmq, MENTORING_EVENT_TOPOLOGY } from "@chronus/rabbitmq";
+import { createLogger, runWithContext } from "@chronus/logger";
 
+const logger = createLogger("event-publisher-worker");
 const POLL_INTERVAL_MS = env.POLL_INTERVAL_MS;
 const BATCH_SIZE = env.BATCH_SIZE;
 
@@ -16,8 +18,7 @@ async function initTopology() {
     routingKey: MENTORING_EVENT_TOPOLOGY.ROUTING_KEY_BOOKINGS,
   });
 
-  console.log(`[Outbox Worker] Connected to RabbitMQ.`);
-  console.log(`[Outbox Worker] Topology asserted: Exchange '${MENTORING_EVENT_TOPOLOGY.EXCHANGE}' <-> Queue '${MENTORING_EVENT_TOPOLOGY.NOTIFICATION_EMAIL_QUEUE}' bound to '${MENTORING_EVENT_TOPOLOGY.ROUTING_KEY_BOOKINGS}'`);
+  logger.info("Connected to RabbitMQ with durable topology asserted.");
 }
 
 /**
@@ -29,6 +30,7 @@ async function processOutboxBatch(): Promise<number> {
   const pendingEvents = await prisma.$queryRaw<
     Array<{
       id: string;
+      correlationId: string;
       eventType: string;
       aggregateId: string;
       payload: any;
@@ -37,7 +39,7 @@ async function processOutboxBatch(): Promise<number> {
       publishedAt: Date | null;
     }>
   >`
-    SELECT id, "eventType", "aggregateId", payload, status, "createdAt", "publishedAt"
+    SELECT id, "correlationId", "eventType", "aggregateId", payload, status, "createdAt", "publishedAt"
     FROM "OutboxEvent"
     WHERE status = 'PENDING'
     ORDER BY "createdAt" ASC
@@ -49,42 +51,47 @@ async function processOutboxBatch(): Promise<number> {
     return 0;
   }
 
-  console.log(`[Outbox Worker] Claimed ${pendingEvents.length} pending event(s) to publish.`);
+  logger.info(`Claimed ${pendingEvents.length} pending outbox event(s) to publish.`);
 
   for (const event of pendingEvents) {
-    try {
-      // Form routing key based on eventType (e.g. "BOOKING_CREATED" -> "booking.created")
-      const routingKey = event.eventType.toLowerCase().replace(/_/g, ".");
+    const correlationId = event.correlationId;
 
-      // 2. Publish to RabbitMQ topic exchange
-      await rabbitmq.publish(
-        {
-          exchange: MENTORING_EVENT_TOPOLOGY.EXCHANGE,
-          routingKey,
-        },
-        {
-          id: event.id,
-          eventType: event.eventType,
-          aggregateId: event.aggregateId,
-          payload: event.payload,
-          createdAt: event.createdAt,
-        }
-      );
+    await runWithContext({ correlationId, eventType: event.eventType, aggregateId: event.aggregateId }, async () => {
+      try {
+        // Form routing key based on eventType (e.g. "BOOKING_CREATED" -> "booking.created")
+        const routingKey = event.eventType.toLowerCase().replace(/_/g, ".");
 
-      // 3. Mark event as PUBLISHED in the database
-      await prisma.outboxEvent.update({
-        where: { id: event.id },
-        data: {
-          status: "PUBLISHED",
-          publishedAt: new Date(),
-        },
-      });
+        // 2. Publish to RabbitMQ topic exchange
+        await rabbitmq.publish(
+          {
+            exchange: MENTORING_EVENT_TOPOLOGY.EXCHANGE,
+            routingKey,
+          },
+          {
+            id: event.id,
+            correlationId,
+            eventType: event.eventType,
+            aggregateId: event.aggregateId,
+            payload: event.payload,
+            createdAt: event.createdAt,
+          }
+        );
 
-      console.log(`[Outbox Worker] Successfully published event ${event.id} (${event.eventType}) to routing key '${routingKey}'`);
-    } catch (err) {
-      console.error(`[Outbox Worker Error] Failed to publish event ${event.id}:`, err);
-      // Leave status as PENDING so it will be retried in subsequent poll cycles
-    }
+        // 3. Mark event as PUBLISHED in the database
+        await prisma.outboxEvent.update({
+          where: { id: event.id },
+          data: {
+            status: "PUBLISHED",
+            publishedAt: new Date(),
+          },
+        });
+
+        logger.info(`Published event ${event.id} (${event.eventType}) to routing key '${routingKey}'`);
+      } catch (err) {
+        logger.error(`Failed to publish event ${event.id}:`, { error: err });
+        // Leave status as PENDING so it will be retried in subsequent poll cycles
+      }
+    });
   }
 
   return pendingEvents.length;
@@ -94,18 +101,18 @@ async function processOutboxBatch(): Promise<number> {
  * Main polling loop for the outbox publisher worker.
  */
 async function startOutboxWorker() {
-  console.log("🚀 [Outbox Worker] Starting transactional outbox publisher service...");
+  logger.info("Starting transactional outbox publisher service...");
 
   try {
     await initTopology();
   } catch (err) {
-    console.error("[Outbox Worker Error] Failed initial connection to RabbitMQ. Retrying in background...", err);
+    logger.error("Failed initial connection to RabbitMQ. Retrying in background...", { error: err });
   }
 
   let isRunning = true;
 
   const shutdown = async () => {
-    console.log("\n🛑 [Outbox Worker] Gracefully shutting down...");
+    logger.info("Gracefully shutting down...");
     isRunning = false;
     await rabbitmq.close();
     await prisma.$disconnect();
@@ -123,7 +130,7 @@ async function startOutboxWorker() {
         await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
       }
     } catch (err) {
-      console.error("[Outbox Worker Loop Error]:", err);
+      logger.error("Outbox worker loop error:", { error: err });
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     }
   }

@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import { correlationMiddleware } from "./middleware/correlation";
 import healthRouter from "./routes/health";
 import usersRouter from "./routes/users";
 import authRouter from "./routes/auth";
@@ -8,6 +9,9 @@ import mentorsRouter from "./routes/mentors";
 import bookingsRouter from "./routes/bookings";
 
 const app = express();
+
+// Correlation ID & Structured Logging Middleware with AsyncLocalStorage
+app.use(correlationMiddleware);
 
 // Enable CORS for port 80 (and default origin for local dev debugging if needed)
 app.use(

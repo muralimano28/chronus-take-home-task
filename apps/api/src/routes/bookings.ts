@@ -4,6 +4,7 @@ import { redis } from "@chronus/redis";
 import { requireAuth, AuthenticatedRequest } from "../middleware/auth";
 import { isValidUuid } from "../utils/validation";
 import { runIdempotent } from "../services/idempotency";
+import { getContext } from "@chronus/logger";
 
 const router = Router();
 
@@ -229,9 +230,11 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
 
         // 4. Record transactional outbox event for reliable notification dispatch
         const bookingBody = formatBookingResponse(booking);
+        const correlationId = getContext()!.correlationId!;
 
         await tx.outboxEvent.create({
           data: {
+            correlationId,
             eventType: "BOOKING_CREATED",
             aggregateId: booking.id,
             payload: bookingBody,
@@ -408,9 +411,11 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
 
         // 3. Record transactional outbox event for reliable cancellation notification dispatch
         const cancelledBookingBody = formatBookingResponse(cancelledBooking);
+        const correlationId = getContext()!.correlationId!;
 
         await tx.outboxEvent.create({
           data: {
+            correlationId,
             eventType: "BOOKING_CANCELLED",
             aggregateId: cancelledBooking.id,
             payload: cancelledBookingBody,
@@ -649,9 +654,11 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
 
         // 4. Record transactional outbox event for reliable reschedule notification dispatch
         const rescheduledBookingBody = formatBookingResponse(bookingRecord);
+        const correlationId = getContext()!.correlationId!;
 
         await tx.outboxEvent.create({
           data: {
+            correlationId,
             eventType: "BOOKING_RESCHEDULED",
             aggregateId: bookingRecord.id,
             payload: {

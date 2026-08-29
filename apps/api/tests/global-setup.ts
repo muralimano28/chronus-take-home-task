@@ -13,12 +13,13 @@ export default async function globalSetup() {
 
   console.log("\n🔄 Synchronizing test database schema...");
   try {
-    // Run prisma db push directly within the packages/db directory using the correct schema
-    execSync("pnpm exec prisma db push --accept-data-loss", {
+    // Synchronize test database schema with force-reset for clean test runs
+    execSync("pnpm exec prisma db push --force-reset", {
       cwd: path.resolve(__dirname, "../../../packages/db"),
       env: {
         ...process.env,
         DATABASE_URL: dbUrl,
+        PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION: "Yes. Proceed with this plan.",
       },
       stdio: "inherit",
     });

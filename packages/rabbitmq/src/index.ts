@@ -2,6 +2,9 @@ import * as amqp from "amqplib";
 import type { Channel, ChannelModel, ConsumeMessage, Options } from "amqplib";
 import { config } from "dotenv";
 import { resolve } from "path";
+import { createLogger } from "@chronus/logger";
+
+const logger = createLogger("rabbitmq");
 
 config({ path: resolve(__dirname, "../../../.env") });
 
@@ -90,19 +93,19 @@ export class RabbitMQClient {
       this.reconnectAttempts = 0;
 
       this.connection.on("error", (err) => {
-        console.error("[RabbitMQ Error] Connection error:", err.message);
+        logger.error(`Connection error: ${err.message}`, { error: err });
       });
 
       this.connection.on("close", () => {
         if (!this.isClosedManually) {
-          console.warn("[RabbitMQ Warning] Connection closed. Attempting reconnect...");
+          logger.warn("Connection closed. Attempting reconnect...");
           this.handleReconnect();
         }
       });
 
       this.channel = await this.connection.createChannel();
       this.channel.on("error", (err) => {
-        console.error("[RabbitMQ Error] Channel error:", err.message);
+        logger.error(`Channel error: ${err.message}`, { error: err });
       });
 
       this.channel.on("close", () => {
@@ -113,7 +116,7 @@ export class RabbitMQClient {
       return this.channel;
     } catch (err: any) {
       this.isConnecting = false;
-      console.error("[RabbitMQ Error] Initial connection failed:", err.message);
+      logger.error(`Initial connection failed: ${err.message}`, { error: err });
       this.handleReconnect();
       throw err;
     }
@@ -128,18 +131,18 @@ export class RabbitMQClient {
     this.channel = null;
 
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error(`[RabbitMQ Fatal] Max reconnect attempts (${this.maxReconnectAttempts}) reached.`);
+      logger.error(`Max reconnect attempts (${this.maxReconnectAttempts}) reached.`);
       return;
     }
 
     this.reconnectAttempts++;
     const delay = Math.min(this.reconnectIntervalMs * Math.pow(1.5, this.reconnectAttempts - 1), 30000);
 
-    console.log(`[RabbitMQ Reconnect] Retrying connection in ${Math.round(delay)}ms (Attempt #${this.reconnectAttempts})...`);
+    logger.info(`Retrying connection in ${Math.round(delay)}ms (Attempt #${this.reconnectAttempts})...`);
     setTimeout(async () => {
       try {
         await this.connect();
-        console.log("[RabbitMQ Reconnect] Successfully reconnected to broker.");
+        logger.info("Successfully reconnected to broker.");
       } catch {
         // Next attempt triggered by handleReconnect in catch
       }
@@ -251,7 +254,7 @@ export class RabbitMQClient {
             ch.ack(msg);
           }
         } catch (err) {
-          console.error(`[RabbitMQ Consumer Error] Failed processing message on queue ${queueName}:`, err);
+          logger.error(`Failed processing message on queue ${queueName}:`, { error: err });
           // Only nack with requeue=false if manual acknowledgment is enabled (routes to DLQ)
           if (!isAutoAck) {
             ch.nack(msg, false, false);

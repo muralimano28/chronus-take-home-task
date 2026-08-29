@@ -243,3 +243,47 @@ Decision 44 — Safe Production Database Migrations and Entrypoint Seeding (`doc
 Why: To ensure containerized deployments are self-initializing without risking unintended data loss:
 * **Atomic Migration on Startup**: `docker-entrypoint.sh` runs `prisma migrate deploy` before launching the Express process, ensuring the database schema is always in sync with application code.
 * **Environment-Gated Seeding**: Added an optional `RUN_SEED` flag (`RUN_SEED="true"`) to the entrypoint. When enabled (for development, staging, or automated review environments), it executes the database seed script to populate test organizations, mentors, members, and availability slots. For live production environments, setting `RUN_SEED="false"` guarantees existing customer data is never overwritten.
+
+Decision 45 — At-Least-Once Delivery Guarantee for Event-Driven Notifications
+Why: In an asynchronous notification pipeline, the primary risk is message loss caused by transient failures (e.g. broker restarts, network partitions, worker crashes, or external email gateway timeouts). To prevent any booking notification from being dropped silently, we explicitly chose an **At-Least-Once Delivery** model.
+
+### Key Architectural Pillars:
+1. **Guaranteed Publisher Durability (Outbox + Broker)**:
+   - Events are atomically recorded in PostgreSQL (`OutboxEvent`) within the state-mutating transaction (`tx`).
+   - The publisher worker (`event-publisher-worker`) marks an event `PUBLISHED` only after receiving confirmation from RabbitMQ. If publishing fails or the worker crashes mid-flight, the event remains `PENDING` and is retried in the next polling cycle.
+   - All published messages are marked `persistent: true` (Delivery Mode 2) on durable topic exchanges and queues.
+2. **Explicit Consumer Acknowledgment (`autoAck: false`)**:
+   - `notification-worker` consumes with manual acknowledgments enabled. It sends `ch.ack(msg)` strictly **after** the email dispatch logic completes successfully.
+   - If the consumer process crashes or disconnects while processing a message, RabbitMQ automatically re-queues the message to be consumed by another healthy worker replica.
+3. **Handling the Duplicate Delivery Trade-off**:
+   - *Trade-off*: In rare crash scenarios (e.g. consumer sends email, but crashes before acknowledging back to RabbitMQ), a message may be delivered again, resulting in a duplicate email. In transactional notification systems, sending a duplicate email is universally preferable to dropping an appointment confirmation entirely.
+   - *Future Production Idempotency*: For strict exactly-once processing in downstream systems, consumers can apply an idempotent consumer check using an atomic Redis key (`SET notification:processed:<eventId> 1 NX EX 604800`) or pass the `eventId` as an Idempotency-Key header directly to transactional email providers (e.g. SendGrid / Resend).
+
+Decision 46 — Centralized Winston Logger with AsyncLocalStorage (`@chronus/logger`)
+Why: To provide structured, consistent, and traceable logging across all backend services (`apps/api`, `apps/event-publisher-worker`, `apps/notification-worker`):
+* **Context Propagation via `AsyncLocalStorage` (ALS)**: Rather than manually passing `correlationId`, `userId`, or `organizationId` through every nested service/function parameter, we use Node.js `AsyncLocalStorage` (`RequestContext`). A custom Winston format automatically extracts and injects active context into every log entry emitted during the execution lifecycle.
+* **Express Request Traceability**: An incoming `correlationMiddleware` captures (or generates) `x-correlation-id`, echoes it on response headers, logs the start/finish with latency/status codes, and populates the ALS context with authenticated user and tenant IDs.
+* **Asynchronous Worker Traceability**: Workers wrap message processing and batch iterations with `runWithContext({ correlationId: event.id, eventType, aggregateId })`, ensuring all log lines produced by the outbox publisher and notification consumer carry the exact matching correlation ID for complete end-to-end distributed tracing.
+* **Environment-Tailored Formats**: Emits structured JSON in production (`NODE_ENV === "production"`) for direct ingestion into log aggregators (ELK, Datadog), and human-readable, colorized output with concise correlation ID tags in development.
+
+Decision 47 — Persistent Correlation ID Propagation in the Transactional Outbox
+Why: To maintain unbroken, deterministic distributed tracing from the initial inbound HTTP request down to asynchronous background processing and email delivery:
+* **Database Schema Field**: Added `correlationId String` (strictly required, non-nullable) to the `OutboxEvent` table (`packages/db/prisma/schema.prisma`).
+* **Ingestion Persistence**: When the API records outbox events within booking transactions (`BOOKING_CREATED`, `BOOKING_CANCELLED`, `BOOKING_RESCHEDULED`), it extracts the active `correlationId` from `getContext()!.correlationId!` and stores it directly in the `OutboxEvent` row.
+* **Worker Propagation**: The outbox publisher worker reads `event.correlationId`, publishes it inside the RabbitMQ message payload, and executes its publishing lifecycle inside `runWithContext({ correlationId, ... })`. Downstream notification consumers consume this same `correlationId`, ensuring a single identifier unifies the client request, database mutations, message queue dispatches, and email transmissions across all logs.
+
+Decision 48 — Monorepo-Wide Structured Logging with Package-Level Winston Integration
+Why: To eliminate unformatted, unfilterable `console.log` / `console.error` calls and establish unified logging across all infrastructure layers and shared packages:
+* **Shared Client Integration (`@chronus/redis`, `@chronus/rabbitmq`)**: Replaced standard `console.*` output in infrastructure clients with dedicated service-tagged loggers (`createLogger("redis")`, `createLogger("rabbitmq")`). Connection handshakes, reconnect backoff cycles, channel errors, and message handling warnings now output formatted, leveled Winston log entries.
+* **Service Lifecycle & Error Transparency**: Startup initialization, graceful termination (`SIGINT`/`SIGTERM`), background loops, and route-level error/warning logs across `apps/api` and `apps/event-publisher-worker` use structured `logger.info`, `logger.warn`, and `logger.error` with error metadata objects attached.
+* **Production Ingestion Uniformity**: Ensures every log line emitted anywhere in the application runtime conforms to JSON specifications in production (`NODE_ENV === "production"`), preventing ingestion errors in log aggregators (ELK, CloudWatch, Datadog).
+
+Decision 49 — Terminal ANSI Highlighting for Local Development Observability
+Why: To improve developer experience and log scannability during local debugging without sacrificing machine-parseable JSON formatting in production:
+* **Visual Hierarchy**: Uses distinct ANSI escape sequences for immediate visual recognition:
+  - **Timestamps**: Dimmed gray (`\x1b[90m`) to prevent visual clutter.
+  - **Log Levels**: Bold color-coded badges (`INFO` in green, `WARN` in yellow, `ERROR` in red, `DEBUG` in blue, `HTTP` in magenta).
+  - **Service Identifiers**: Magenta tags (e.g. `[api]`, `[redis]`, `[rabbitmq]`) to distinguish concurrent monorepo processes.
+  - **Correlation ID**: Cyan badge `[cid:<uuid>]` for rapid visual matching across terminal streams.
+  - **Context Metadata**: Dimmed JSON formatting for supplementary payloads (`{ durationMs, statusCode, url }`).
+* **Strict Production Isolation**: ANSI formatting is strictly guarded by `!isProduction`, ensuring production containers continue emitting raw JSON lines for log shippers.

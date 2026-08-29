@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { prisma } from "@chronus/db";
+import { setContext } from "@chronus/logger";
 
 import { env } from "../config/env";
  
@@ -71,9 +72,15 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
     // SECURITY NOTE: We trust only 'membershipId' and 'organizationId' from the JWT payload.
     // Relying on mutable state inside the JWT (like 'isMentor' or user details) presents a security risk
     // if privileges are revoked or updated. The database remains the single source of truth.
-    // For simplicity, we assign the payload to req.user for now, but any critical logic 
-    // must query/verify states directly from the database membership record.
     req.user = payload;
+
+    // Immediately populate AsyncLocalStorage context so all downstream logs include user and tenant metadata
+    setContext({
+      organizationId: payload.organizationId,
+      userId: payload.userId,
+      membershipId: payload.membershipId,
+    });
+
     next();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

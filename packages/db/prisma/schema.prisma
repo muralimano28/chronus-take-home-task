@@ -134,13 +134,14 @@ enum OutboxStatus {
 }
 
 model OutboxEvent {
-  id          String       @id @default(uuid()) @db.Uuid
-  eventType   String
-  aggregateId String
-  payload     Json
-  status      OutboxStatus @default(PENDING)
-  createdAt   DateTime     @default(now())
-  publishedAt DateTime?
+  id            String       @id @default(uuid()) @db.Uuid
+  correlationId String
+  eventType     String
+  aggregateId   String
+  payload       Json
+  status        OutboxStatus @default(PENDING)
+  createdAt     DateTime     @default(now())
+  publishedAt   DateTime?
 
   @@index([status, createdAt])
 }

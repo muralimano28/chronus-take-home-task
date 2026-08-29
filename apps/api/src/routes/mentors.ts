@@ -4,6 +4,7 @@ import { requireAuth, AuthenticatedRequest } from "../middleware/auth";
 import { validateTenantAccess } from "../middleware/tenant";
 import { isValidUuid } from "../utils/validation";
 import { redis } from "@chronus/redis";
+import { logger } from "@chronus/logger";
 
 const router = Router({ mergeParams: true });
 
@@ -37,11 +38,11 @@ router.get("/", requireAuth, validateTenantAccess, async (req: AuthenticatedRequ
         version = "1";
         // Initialize version to 1 if not present (unawaited fire-and-forget)
         redis.set(versionKey, version).catch((err) => {
-          console.warn(`[Redis Cache Warning] Failed to initialize version for org ${organizationId}:`, err);
+          logger.warn(`Failed to initialize version for org ${organizationId}:`, { error: err });
         });
       }
     } catch (redisError) {
-      console.warn(`[Redis Cache Warning] Failed to get version for org ${organizationId}:`, redisError);
+      logger.warn(`Failed to get version for org ${organizationId}:`, { error: redisError });
     }
 
     // 3. Check second cache level for paginated mentor list (only if version was successfully retrieved)
@@ -50,12 +51,12 @@ router.get("/", requireAuth, validateTenantAccess, async (req: AuthenticatedRequ
       try {
         const cachedData = await redis.get(cacheKey);
         if (cachedData) {
-          console.log("[Redis Cache] Fetched cached mentors for key", cacheKey);
+          logger.info(`Fetched cached mentors for key: ${cacheKey}`);
           res.status(200).json(JSON.parse(cachedData));
           return;
         }
       } catch (redisError) {
-        console.warn(`[Redis Cache Warning] Failed to read cached mentors for key ${cacheKey}:`, redisError);
+        logger.warn(`Failed to read cached mentors for key ${cacheKey}:`, { error: redisError });
       }
     }
 
@@ -115,15 +116,13 @@ router.get("/", requireAuth, validateTenantAccess, async (req: AuthenticatedRequ
 
     // 7. Fire-and-forget: Populate Redis cache with 24 hours TTL in the background (if version was retrieved)
     if (cacheKey) {
-      redis
-        .set(cacheKey, JSON.stringify(responsePayload), "EX", CACHE_TTL_SECONDS)
-        .catch((redisError) => {
-          console.warn(`[Redis Cache Warning] Failed to set cache for key ${cacheKey}:`, redisError);
-        });
+      redis.set(cacheKey, JSON.stringify(responsePayload), "EX", CACHE_TTL_SECONDS).catch((redisError) => {
+        logger.warn(`Failed to set cache for key ${cacheKey}:`, { error: redisError });
+      });
     }
   } catch (error) {
-    console.error(`[Mentors Route Error] Failed to fetch mentors for org ${organizationId}:`, error);
-    res.status(500).json({ error: "Internal server error." });
+    logger.error(`Failed to fetch mentors for org ${organizationId}:`, { error });
+    res.status(500).json({ error: "Failed to fetch mentors." });
   }
 });
 
@@ -235,25 +234,26 @@ router.get("/:mentorId/slots", requireAuth, validateTenantAccess, async (req: Au
         } else {
           slotsVersion = "1";
           // Initialize version to 1 if not present (unawaited fire-and-forget)
-          redis.set(slotsVersionKey, "1").catch((err) => {
-            console.warn(`[Redis Cache Warning] Failed to initialize slots version for mentor ${mentorId}:`, err);
+          redis.set(slotsVersionKey, slotsVersion).catch((err) => {
+            logger.warn(`Failed to initialize slots version for mentor ${mentorId}:`, { error: err });
           });
         }
       } catch (redisError) {
-        console.warn(`[Redis Cache Warning] Failed to get slots version for mentor ${mentorId}:`, redisError);
+        logger.warn(`Failed to get slots version for mentor ${mentorId}:`, { error: redisError });
       }
 
-      if (slotsVersion) {
-        slotsCacheKey = `org:${organizationId}:mentor:${mentorId}:slots:v${slotsVersion}:start:${startDateStr}:end:${endDateStr}`;
+      // 4. Check second cache level for mentor slots (only if version was successfully retrieved)
+      slotsCacheKey = slotsVersion ? `org:${organizationId}:mentor:${mentorId}:slots:v${slotsVersion}:start:${startDateStr}:end:${endDateStr}` : null;
+      if (slotsCacheKey) {
         try {
           const cachedSlots = await redis.get(slotsCacheKey);
           if (cachedSlots) {
-            console.log("[Redis Cache] Fetched cached slots for key", slotsCacheKey);
+            logger.info(`Fetched cached slots for key: ${slotsCacheKey}`);
             res.status(200).json(JSON.parse(cachedSlots));
             return;
           }
         } catch (redisError) {
-          console.warn(`[Redis Cache Warning] Failed to read cached slots for key ${slotsCacheKey}:`, redisError);
+          logger.warn(`Failed to read cached slots for key ${slotsCacheKey}:`, { error: redisError });
         }
       }
     } else {
@@ -308,15 +308,13 @@ router.get("/:mentorId/slots", requireAuth, validateTenantAccess, async (req: Au
 
     // 5. Fire-and-forget: Populate cache if predefined range was used
     if (slotsCacheKey) {
-      redis
-        .set(slotsCacheKey, JSON.stringify(slots), "EX", SLOTS_CACHE_TTL_SECONDS)
-        .catch((redisError) => {
-          console.warn(`[Redis Cache Warning] Failed to set slots cache for key ${slotsCacheKey}:`, redisError);
-        });
+      redis.set(slotsCacheKey, JSON.stringify(slots), "EX", SLOTS_CACHE_TTL_SECONDS).catch((redisError) => {
+        logger.warn(`Failed to set slots cache for key ${slotsCacheKey}:`, { error: redisError });
+      });
     }
   } catch (error) {
-    console.error(`[Slots Route Error] Failed to fetch slots for mentor ${mentorId} in org ${organizationId}:`, error);
-    res.status(500).json({ error: "Internal server error." });
+    logger.error(`Failed to fetch slots for mentor ${mentorId} in org ${organizationId}:`, { error });
+    res.status(500).json({ error: "Failed to fetch slots." });
   }
 });
 
