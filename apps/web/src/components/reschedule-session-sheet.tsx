@@ -41,8 +41,9 @@ export function RescheduleSessionSheet({
   useEffect(() => {
     if (open) {
       setMentorsLoading(true);
-      api.get<Mentor[]>("/mentors")
-        .then(res => setMentors(res.data))
+      // TODO: We will allow searching for mentors in future iterations
+      api.get<{ data: Mentor[] }>("/mentors?limit=100")
+        .then(res => setMentors(res.data.data))
         .catch(err => {
           console.error("Failed to fetch mentors:", err);
           setError(err.message || "Failed to load mentors.");

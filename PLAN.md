@@ -151,3 +151,29 @@ Decision 32 — Client-side Session Cache in LocalStorage (Temporary)
 Why: Storing non-sensitive user metadata (name, email, timezone, organizationName) in `localStorage` allows the client application to instantly restore UI display state on browser page refreshes, avoiding layout shifts or a "flash of unauthenticated state". 
 * **Downside**: Storing state in `localStorage` can lead to client-side stale data if the user's membership details or organization name changes on the server. The client will remain unaware of the server-side updates until they log out and log back in.
 * **Future Mitigation**: To resolve this security and sync downside, we plan to implement a `/auth/me` (or `/auth/session`) endpoint on the API server. Upon app mount, the client will fetch the authenticated session directly from this endpoint, verifying the cookie-based JWT token and populating the context state dynamically from the database.
+
+Decision 33 — Favoring Idempotency Keys over Pessimistic Row Locking for Overlap Checks
+Why: We decided to eliminate pessimistic database row locking (`SELECT ... FOR UPDATE` on `OrganizationUser`) in favor of relying on strict API **Idempotency Keys** paired with standard transactional overlap validation queries.
+
+### Detailed Rationale & Context:
+* **The Problem (Race Condition vs. Resource Saturation)**: In booking workflows (create & reschedule), there are two distinct concurrency concerns:
+  1. *Slot Contention (Multi-User)*: Multiple users competing for the exact same mentor slot simultaneously. This is fully protected by database-level constraints (atomic state updates and unique indexes on `slotId`).
+  2. *Member Overlap (Single-User)*: A single member attempting to book two distinct slots that overlap in time (e.g. 10:00–11:00 AM and 10:30–11:30 AM). Under standard `Read Committed` isolation levels, simultaneous requests from the same user could theoretically pass the `findMany` overlap check before either transaction commits.
+* **Why Pessimistic Locking Was Reevaluated**:
+  * *Low Occurrence Probability*: A genuine human user creating two overlapping sessions at the exact same millisecond across multiple tabs/devices is an extreme edge case.
+  * *High Infrastructure Cost*: Placing a pessimistic row lock (`FOR UPDATE`) on the `OrganizationUser` table serializes all operations for that user at the database engine level. This holds open database connections in the connection pool, increases transaction duration, heightens deadlock risks, and severely bottlenecks throughput during high-traffic spikes.
+* **Pros of Idempotency-Driven Optimistic Checking**:
+  * **Zero Database Lock Overhead**: Database transactions execute in parallel without acquiring blocking row locks on user records, drastically improving throughput and minimizing connection pool exhaustion.
+  * **Natural Replay and Double-Click Protection**: Client-side single-flight disablement and backend `Idempotency-Key` tracking prevent accidental duplicate submissions and network retries from executing multiple bookings.
+  * **Cleaner Architecture**: Database responsibility remains focused on data consistency and constraints, avoiding artificial serialization locks on parent entities.
+* **Cons & Trade-offs**:
+  * In the theoretical scenario where a malicious actor sends two concurrent requests with *different* `Idempotency-Key` headers for overlapping time slots within the same 50ms window, the overlap check could pass for both.
+* **Future Mitigations (If Strict Overlap Invariance is Demanded at Scale)**:
+  1. *PostgreSQL Range Exclusion (`EXCLUDE USING GIST`)*: Define a Postgres GiST exclusion constraint on `(memberId WITH =, tstzrange(startTime, endTime) WITH &&)` so that the storage engine rejects overlapping active ranges atomically without explicit row locks.
+  2. *Application-Level Distributed Locks (Redis / Redlock)*: Acquire a lightweight, non-blocking lock on `lock:member:<membershipId>` in memory (with TTL < 2s) to coordinate concurrency without touching database locks.
+
+Decision 34 — Page & Limit Pagination Contract for Mentors Listing
+Why: To prevent unbounded database memory usage, slow query execution, and large network payloads as organizations scale, the `GET /mentors` endpoint now enforces pagination using `page` and `limit` query parameters with safe defaults (page=1, limit=10, max=100). The endpoint returns a standard envelope `{ data: Mentor[], pagination: { total, page, limit, totalPages } }`, enabling clean frontend pagination controls and predictable API performance.
+
+Decision 35 — Scoped Date Range Filtering on Mentor Slots API
+Why: To support calendar and availability views without over-fetching distant future availability, `GET /mentors/:mentorId/slots` supports optional `startDate` and `endDate` query parameters (ISO 8601 strings). When `endDate` is omitted, the API automatically defaults to a **30-day upper bound window** from `startDate` (or `now`). The endpoint enforces validation (dates must be valid and `startDate <= endDate`) while continuing to guarantee that expired past slots (`< now`) are never returned, even if an earlier `startDate` is requested.

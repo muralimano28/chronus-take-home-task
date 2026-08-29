@@ -95,9 +95,14 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
       idempotencyKey,
       payload: { slotId },
       handler: async (tx) => {
+
+        // For a mentorship/booking platform at normal-to-high scale:
+        // Accidental duplicate clicks by the user are already prevented by disabling the button in the UI and using Idempotency-Key.
+        // Pessimistic DB row locking (SELECT FOR UPDATE) on the user table is usually overkill for user overlap checks and can indeed become a connection pool bottleneck.
+
         // Concurrency lock: Acquire pessimistic lock on the booking member's OrganizationUser row
         // to prevent concurrent overlap check bypass.
-        await tx.$executeRaw`SELECT 1 FROM "OrganizationUser" WHERE id = ${membershipId}::uuid FOR UPDATE`;
+        // await tx.$executeRaw`SELECT 1 FROM "OrganizationUser" WHERE id = ${membershipId}::uuid FOR UPDATE`;
 
         // 1. Fetch the slot to verify existence and business rules
         const slot = await tx.mentorSlot.findUnique({
@@ -415,9 +420,14 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
       idempotencyKey,
       payload: { bookingId, newSlotId },
       handler: async (tx) => {
+
+        // For a mentorship/booking platform at normal-to-high scale:
+        // Accidental duplicate clicks by the user are already prevented by disabling the button in the UI and using Idempotency-Key.
+        // Pessimistic DB row locking (SELECT FOR UPDATE) on the user table is usually overkill for user overlap checks and can indeed become a connection pool bottleneck.
+
         // Concurrency lock: Acquire pessimistic lock on the booking member's OrganizationUser row
         // to prevent concurrent overlap check bypass.
-        await tx.$executeRaw`SELECT 1 FROM "OrganizationUser" WHERE id = ${membershipId}::uuid FOR UPDATE`;
+        // await tx.$executeRaw`SELECT 1 FROM "OrganizationUser" WHERE id = ${membershipId}::uuid FOR UPDATE`;
 
         // 1. Fetch current booking
         const booking = await tx.booking.findUnique({

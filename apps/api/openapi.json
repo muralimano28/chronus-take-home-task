@@ -191,29 +191,68 @@
     "/mentors": {
       "get": {
         "summary": "List Organization Mentors",
-        "description": "Fetches all active mentors in the authenticated user's organization. Requires the session cookie.",
+        "description": "Fetches active mentors in the authenticated user's organization with pagination support. Requires the session cookie.",
         "security": [
           {
             "cookieAuth": []
           }
         ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-indexed, default: 1)",
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Number of mentors per page (default: 10, max: 100)",
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "List of mentors in the organization",
+            "description": "Paginated list of mentors in the organization",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "membershipId": { "type": "string", "format": "uuid" },
-                      "userId": { "type": "string", "format": "uuid" },
-                      "email": { "type": "string", "format": "email" },
-                      "name": { "type": "string" },
-                      "timezone": { "type": "string", "example": "America/New_York" },
-                      "createdAt": { "type": "string", "format": "date-time" },
-                      "updatedAt": { "type": "string", "format": "date-time" }
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "membershipId": { "type": "string", "format": "uuid" },
+                          "userId": { "type": "string", "format": "uuid" },
+                          "email": { "type": "string", "format": "email" },
+                          "name": { "type": "string" },
+                          "timezone": { "type": "string", "example": "America/New_York" },
+                          "createdAt": { "type": "string", "format": "date-time" },
+                          "updatedAt": { "type": "string", "format": "date-time" }
+                        }
+                      }
+                    },
+                    "pagination": {
+                      "type": "object",
+                      "properties": {
+                        "total": { "type": "integer", "example": 25 },
+                        "page": { "type": "integer", "example": 1 },
+                        "limit": { "type": "integer", "example": 10 },
+                        "totalPages": { "type": "integer", "example": 3 }
+                      }
                     }
                   }
                 }
@@ -251,25 +290,62 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-indexed, default: 1)",
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Number of mentors per page (default: 10, max: 100)",
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "maximum": 100
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "List of mentors in the organization",
+            "description": "Paginated list of mentors in the organization",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "membershipId": { "type": "string", "format": "uuid" },
-                      "userId": { "type": "string", "format": "uuid" },
-                      "email": { "type": "string", "format": "email" },
-                      "name": { "type": "string" },
-                      "timezone": { "type": "string", "example": "America/New_York" },
-                      "createdAt": { "type": "string", "format": "date-time" },
-                      "updatedAt": { "type": "string", "format": "date-time" }
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "membershipId": { "type": "string", "format": "uuid" },
+                          "userId": { "type": "string", "format": "uuid" },
+                          "email": { "type": "string", "format": "email" },
+                          "name": { "type": "string" },
+                          "timezone": { "type": "string", "example": "America/New_York" },
+                          "createdAt": { "type": "string", "format": "date-time" },
+                          "updatedAt": { "type": "string", "format": "date-time" }
+                        }
+                      }
+                    },
+                    "pagination": {
+                      "type": "object",
+                      "properties": {
+                        "total": { "type": "integer", "example": 25 },
+                        "page": { "type": "integer", "example": 1 },
+                        "limit": { "type": "integer", "example": 10 },
+                        "totalPages": { "type": "integer", "example": 3 }
+                      }
                     }
                   }
                 }
@@ -294,7 +370,7 @@
     "/mentors/{mentorId}/slots": {
       "get": {
         "summary": "List Mentor Slots",
-        "description": "Fetches availability slots for a specific mentor within the authenticated user's organization. Requires the session cookie.",
+        "description": "Fetches availability slots for a specific mentor within the authenticated user's organization. Supports date range filtering via startDate and endDate. Requires the session cookie.",
         "security": [
           {
             "cookieAuth": []
@@ -309,6 +385,26 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "startDate",
+            "in": "query",
+            "required": false,
+            "description": "Filter slots starting at or after this ISO 8601 timestamp",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "required": false,
+            "description": "Filter slots starting at or before this ISO 8601 timestamp (defaults to +30 days from startDate)",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
             }
           }
         ],
@@ -337,7 +433,7 @@
             }
           },
           "400": {
-            "description": "Invalid mentor ID format"
+            "description": "Invalid mentor ID or date range format"
           },
           "401": {
             "description": "Authentication required or invalid session"
@@ -382,6 +478,26 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "startDate",
+            "in": "query",
+            "required": false,
+            "description": "Filter slots starting at or after this ISO 8601 timestamp",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "required": false,
+            "description": "Filter slots starting at or before this ISO 8601 timestamp (defaults to +30 days from startDate)",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
             }
           }
         ],
