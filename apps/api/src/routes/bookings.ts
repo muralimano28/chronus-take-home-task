@@ -227,9 +227,21 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
           },
         });
 
+        // 4. Record transactional outbox event for reliable notification dispatch
+        const bookingBody = formatBookingResponse(booking);
+
+        await tx.outboxEvent.create({
+          data: {
+            eventType: "BOOKING_CREATED",
+            aggregateId: booking.id,
+            payload: bookingBody,
+            status: "PENDING",
+          },
+        });
+
         return {
           statusCode: 201,
-          body: formatBookingResponse(booking),
+          body: bookingBody,
         };
       },
     });
@@ -394,9 +406,21 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
           },
         });
 
+        // 3. Record transactional outbox event for reliable cancellation notification dispatch
+        const cancelledBookingBody = formatBookingResponse(cancelledBooking);
+
+        await tx.outboxEvent.create({
+          data: {
+            eventType: "BOOKING_CANCELLED",
+            aggregateId: cancelledBooking.id,
+            payload: cancelledBookingBody,
+            status: "PENDING",
+          },
+        });
+
         return {
           statusCode: 200,
-          body: formatBookingResponse(cancelledBooking),
+          body: cancelledBookingBody,
         };
       },
     });
@@ -465,7 +489,15 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
         const booking = await tx.booking.findUnique({
           where: { id: bookingId },
           include: {
-            slot: true,
+            slot: {
+              include: {
+                mentor: {
+                  include: {
+                    user: { select: { name: true, email: true } },
+                  },
+                },
+              },
+            },
           },
         });
 
@@ -615,9 +647,35 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
         // 3. Capture the old mentor ID in closure only after all DB operations succeed
         oldMentorId = booking.slot.mentorId;
 
+        // 4. Record transactional outbox event for reliable reschedule notification dispatch
+        const rescheduledBookingBody = formatBookingResponse(bookingRecord);
+
+        await tx.outboxEvent.create({
+          data: {
+            eventType: "BOOKING_RESCHEDULED",
+            aggregateId: bookingRecord.id,
+            payload: {
+              ...rescheduledBookingBody,
+              previousSlot: {
+                id: booking.slot.id,
+                startTime: booking.slot.startTime,
+                endTime: booking.slot.endTime,
+                mentor: {
+                  membershipId: booking.slot.mentor.id,
+                  userId: booking.slot.mentor.userId,
+                  name: booking.slot.mentor.user.name,
+                  email: booking.slot.mentor.user.email,
+                  timezone: booking.slot.mentor.timezone,
+                },
+              },
+            },
+            status: "PENDING",
+          },
+        });
+
         return {
           statusCode: 200,
-          body: formatBookingResponse(bookingRecord),
+          body: rescheduledBookingBody,
         };
       },
     });
@@ -671,6 +729,7 @@ function formatBookingResponse(b: any) {
       userId: b.member.userId,
       name: b.member.user?.name,
       email: b.member.user?.email,
+      timezone: b.member.timezone,
     },
     slot: {
       id: b.slot.id,

@@ -177,3 +177,69 @@ Why: To prevent unbounded database memory usage, slow query execution, and large
 
 Decision 35 — Scoped Date Range Filtering on Mentor Slots API
 Why: To support calendar and availability views without over-fetching distant future availability, `GET /mentors/:mentorId/slots` supports optional `startDate` and `endDate` query parameters (ISO 8601 strings). When `endDate` is omitted, the API automatically defaults to a **30-day upper bound window** from `startDate` (or `now`). The endpoint enforces validation (dates must be valid and `startDate <= endDate`) while continuing to guarantee that expired past slots (`< now`) are never returned, even if an earlier `startDate` is requested.
+
+Decision 36 — Redis Monorepo Package Extraction (`@chronus/redis`)
+Why: To support multi-service architectures across the monorepo (e.g. `apps/api`, future background notification workers, and scheduled jobs), Redis client instantiation and connection management are centralized into a dedicated `@chronus/redis` package. This prevents duplicate client connection pools and ensures standardized error handling, connection retry logic, and environment configuration across all services.
+
+Decision 37 — Versioned Cache-Aside Strategy for Mentors and Availability Slots
+Why: To handle high-concurrency read traffic while ensuring near-instant cache invalidation upon state changes without expensive key scanning (`KEYS` / `SCAN`), we adopted a **Versioned Cache-Aside** pattern with strict tenant isolation and resilient fallback:
+
+### Key Design Details:
+1. **Cache Normalization & Partitioning**:
+   - **Mentor Directory**: Partitioned by organization, version, page, and limit: `org:<orgId>:mentors:v<version>:page:<page>:limit:<limit>` (TTL: 24 hours). Limit inputs are normalized to `[10, 20, 50, 100]` to maximize cache hit ratios.
+   - **Mentor Slots Availability**: Partitioned by organization, mentor, version, and concrete date boundaries: `org:<orgId>:mentor:<mentorId>:slots:v<version>:start:<startDate>:end:<endDate>` (TTL: 15 minutes). Supported predefined range queries (`today`, `next_7_days`, `next_30_days`, `this_month`) compute explicit `YYYY-MM-DD` string keys to avoid cache drift across midnight transitions. Custom arbitrary date ranges bypass the cache.
+
+2. **$O(1)$ Atomic Invalidation via Version Bumping**:
+   - Instead of scanning or purging hundreds of pagination and range keys across Redis, an integer version key is maintained per scope (`org:<orgId>:mentors:version` and `org:<orgId>:mentor:<mentorId>:slots:version`).
+   - Mutations (booking creation, cancellation, rescheduling) atomically increment the version via `INCR` (with exponential backoff retries in a background unawaited task). Incrementing the version instantly invalidates all cached views for that mentor/organization in $O(1)$ time, while old keys naturally expire via TTL and LRU eviction (`--maxmemory 256mb --maxmemory-policy allkeys-lru` configured in `docker-compose.yml`).
+   - For reschedule operations, both the old mentor's slots version and the new mentor's slots version are bumped (deduplicating if rescheduling with the same mentor).
+
+3. **Resilience & Graceful Degradation**:
+   - Redis lookups are wrapped in fail-safe try/catch blocks. If Redis is unavailable or fails to return a version, the API gracefully degrades to querying PostgreSQL directly, ensuring zero downtime for end users.
+   - Write operations to the cache use unawaited promises (`.catch(...)`), preventing cache write latency or Redis write errors from degrading API response times.
+
+Decision 38 — Transactional Outbox Pattern for Asynchronous Notifications
+Why: In high-reliability distributed architectures, dispatching notifications (emails, Slack messages, push alerts) directly inside or immediately after an HTTP request creates a dual-write vulnerability (e.g. database commit succeeds but message broker/network call fails, resulting in lost notifications; or notification is dispatched but database transaction rolls back, sending false alarms). 
+
+To guarantee **at-least-once delivery** without coupling API response latency to third-party notification services, we implement the **Transactional Outbox Pattern**:
+- **Atomic Persistence**: An `OutboxEvent` record (containing `eventType`, `aggregateId`, and structured `payload` with `status: PENDING`) is written within the exact same database transaction (`tx`) as the state mutation (e.g. `POST /bookings`).
+- **Guaranteed Consistency**: If the booking creation transaction fails or rolls back, no outbox event is persisted. If the transaction commits, the event is guaranteed to be durably saved in PostgreSQL.
+- **Decoupled Worker Processing**: A separate background worker periodically polls or consumes pending outbox events, dispatches notifications with retries and exponential backoff, and marks the event `PUBLISHED` upon success.
+- **Self-Contained Event Payload Strategy**: The event payload is fully self-contained (includes member name, member email, mentor name, mentor email, mentor timezone, start/end timestamps, and booking ID). Background workers do not query the database to assemble email/notification content, which drastically reduces database read contention, protects workers against future schema changes, and ensures notifications reflect the exact snapshot of data at the time of the event.
+
+Decision 39 — Shared RabbitMQ Client with Auto-Reconnect & Dead-Letter Queueing (`@chronus/rabbitmq`)
+Why: To provide reliable asynchronous messaging between our API outbox publisher and background notification workers, we created a dedicated `@chronus/rabbitmq` package designed for high availability and fault tolerance:
+- **Resilient Auto-Reconnection**: Reconnects automatically on socket drops or connection errors with exponential backoff (starting at 3s with a 1.5x multiplier capped at 30s) and handles re-assertion of channels.
+- **Declarative Queue & Dead-Letter Topology**: Helper `assertTopology(...)` automatically declares durable primary queues, sets up corresponding Dead Letter Exchanges (`<queue>.dlx`), and binds Dead Letter Queues (`<queue>.dlq`).
+- **Safe Poison Message Isolation**: Unhandled message processing errors in `consume(...)` reject messages with `requeue: false` (`nack`), routing unparseable or repeatedly failing messages directly into the DLQ without blocking the consumer pipeline.
+- **Message Durability**: All published messages default to `persistent: true` with JSON content typing.
+
+Decision 40 — Event-Driven Email Notification Worker Service (`apps/notification-worker`)
+Why: Mentoring session lifecycle events (`BOOKING_CREATED`, `BOOKING_CANCELLED`, `BOOKING_RESCHEDULED`) require transactional email notifications to both the member and mentor without degrading HTTP response latency or burdening the primary database.
+* **Worker Isolation**: Implemented a standalone consumer worker [`apps/notification-worker`](file:///Users/mano/workspace/chronus-take-home-task/apps/notification-worker) decoupled from the web and API servers.
+* **Zero-DB Payload Strategy**: The worker relies entirely on the self-contained event payload published through RabbitMQ without issuing secondary database read queries.
+* **Dual-Timezone Localization**: Uses pure date utilities from `@chronus/utils` (`formatDateInTimezone`, `formatTimeRangeInTimezone`) to format appointment dates and times localized to the member's and mentor's individual configured timezones (e.g. `America/New_York` vs `Asia/Kolkata`).
+* **Reliable Acknowledgment**: Consumer operates with `autoAck: false` (manual acknowledgment) and `prefetch: 10`. Messages are acknowledged (`ch.ack`) strictly after successful email delivery; uncaught exceptions trigger `nack(msg, false, false)` to route poisoned messages to the Dead Letter Queue (`notification.email.queue.dlq`).
+
+Decision 41 — Concurrency-Safe Transactional Outbox Publisher Worker (`apps/event-publisher-worker`)
+Why: To reliably bridge database transactions and RabbitMQ message broker without missing events or causing duplicate publishing under horizontal scaling:
+* **`FOR UPDATE SKIP LOCKED` Polling**: The publisher queries pending `OutboxEvent` records in batches using PostgreSQL's `FOR UPDATE SKIP LOCKED`. This allows multiple outbox worker instances to run concurrently across replicas without stepping on each other or experiencing row lock contention.
+* **Immediate Batch Draining**: If a batch yields events, the worker immediately fetches the next batch without waiting for `POLL_INTERVAL_MS`, minimizing queue lag during traffic bursts while sleeping during idle periods.
+* **Resilient Retry Lifecycle**: If publishing to RabbitMQ fails, the event remains in `PENDING` state to be retried on subsequent polling intervals rather than being dropped.
+
+Decision 42 — Dual-Target Module Exports for Monorepo Shared Packages (`@chronus/utils`)
+Why: In a full-stack TypeScript monorepo, shared packages (like `@chronus/utils`) are consumed simultaneously by different runtimes:
+1. **Frontend / Vite (`import`)**: Requires direct TypeScript source (`./src/index.ts`) for hot-module reloading and fast dev bundling without requiring continuous background compilation.
+2. **Backend / Workers / Docker (`node` / CommonJS `require`)**: Requires compiled CommonJS (`./dist/src/index.js`) and declarations (`./dist/src/index.d.ts`) since production Node.js cannot execute raw TypeScript files with type annotations at runtime.
+* **Solution**: Configured conditional package exports in `package.json` with `"import"` pointing to `./src/index.ts` and `"default"` / `"types"` pointing to `./dist/`, providing seamless compatibility across all development and production container environments.
+
+Decision 43 — Complete Containerization & Health-Check Orchestration in Docker Compose
+Why: To guarantee that the full local environment (PostgreSQL, Redis, RabbitMQ, API, Workers, and Web frontend) can be spun up deterministically with a single `docker compose up` command:
+* **Multi-Stage Docker Builds**: Created optimized multi-stage Dockerfiles leveraging Turborepo's `turbo prune` for fast caching, minimal image size, and non-root execution (`adduser --system`).
+* **Deep Health Check Probing**: Added healthchecks across all services (`pg_isready` for Postgres, `redis-cli ping` for Redis, `rabbitmq-diagnostics` for RabbitMQ, HTTP health endpoint probe for API, Nginx wget probe for Web, and process liveness for background workers).
+* **Strict Health-Gated Startup Ordering**: Configured `depends_on: condition: service_healthy` so downstream services (such as workers and web frontend) only start once API migrations and core infrastructure are fully healthy and ready to accept traffic.
+
+Decision 44 — Safe Production Database Migrations and Entrypoint Seeding (`docker-entrypoint.sh`)
+Why: To ensure containerized deployments are self-initializing without risking unintended data loss:
+* **Atomic Migration on Startup**: `docker-entrypoint.sh` runs `prisma migrate deploy` before launching the Express process, ensuring the database schema is always in sync with application code.
+* **Environment-Gated Seeding**: Added an optional `RUN_SEED` flag (`RUN_SEED="true"`) to the entrypoint. When enabled (for development, staging, or automated review environments), it executes the database seed script to populate test organizations, mentors, members, and availability slots. For live production environments, setting `RUN_SEED="false"` guarantees existing customer data is never overwritten.

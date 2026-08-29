@@ -1,22 +1,20 @@
 {
-  "name": "@chronus/utils",
+  "name": "@chronus/rabbitmq",
   "version": "0.0.0",
   "private": true,
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
-  "exports": {
-    ".": {
-      "import": "./src/index.ts",
-      "types": "./dist/src/index.d.ts",
-      "default": "./dist/src/index.js"
-    }
-  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch"
   },
+  "dependencies": {
+    "amqplib": "^0.10.4",
+    "dotenv": "^16.4.5"
+  },
   "devDependencies": {
     "@chronus/tsconfig": "workspace:*",
+    "@types/amqplib": "^0.10.5",
     "@types/node": "^20.14.9",
     "typescript": "^5.5.4"
   }

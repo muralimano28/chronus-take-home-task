@@ -1,0 +1,23 @@
+{
+  "name": "event-publisher-worker",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@chronus/db": "workspace:*",
+    "@chronus/rabbitmq": "workspace:*",
+    "@chronus/utils": "workspace:*",
+    "dotenv": "^16.4.5",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@chronus/tsconfig": "workspace:*",
+    "@types/node": "^20.14.9",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.4"
+  }
+}

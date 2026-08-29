@@ -9,11 +9,11 @@ datasource db {
 }
 
 model Organization {
-  id          String             @id @default(uuid()) @db.Uuid
-  name        String
+  id   String @id @default(uuid()) @db.Uuid
+  name String
 
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   users           OrganizationUser[]
   mentorSlots     MentorSlot[]
@@ -22,30 +22,30 @@ model Organization {
 }
 
 model User {
-  id            String             @id @default(uuid()) @db.Uuid
-  email         String             @unique
-  name          String
+  id    String @id @default(uuid()) @db.Uuid
+  email String @unique
+  name  String
 
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   organizations OrganizationUser[]
 }
 
 model OrganizationUser {
-  id             String       @id @default(uuid()) @db.Uuid
-  organizationId String       @db.Uuid
-  userId         String       @db.Uuid
-  timezone       String       @db.VarChar(50)
-  isMentor       Boolean      @default(false)
+  id             String  @id @default(uuid()) @db.Uuid
+  organizationId String  @db.Uuid
+  userId         String  @db.Uuid
+  timezone       String  @db.VarChar(50)
+  isMentor       Boolean @default(false)
 
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user           User         @relation(fields: [userId], references: [id], onDelete: NoAction)
-  mentorSlots    MentorSlot[]
-  bookings       Booking[]
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: NoAction)
+  mentorSlots  MentorSlot[]
+  bookings     Booking[]
 
   // In the below line, id refers to the id of the OrganizationUser model. As it is unique, [organizationId, id] will also be unique.
   // But PostgreSQL requires the columns referenced by a foreign key to have a unique constraint/index matching the referenced column set.
@@ -71,9 +71,9 @@ model MentorSlot {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  mentor         OrganizationUser @relation(fields: [organizationId, mentorId], references: [organizationId, id], onDelete: NoAction)
-  bookings       Booking[]        @relation("BookingSlot")
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  mentor       OrganizationUser @relation(fields: [organizationId, mentorId], references: [organizationId, id], onDelete: NoAction)
+  bookings     Booking[]        @relation("BookingSlot")
 
   @@unique([organizationId, id])
   @@unique([organizationId, mentorId, startTime, endTime]) // This does not prevent overlapping slots
@@ -91,13 +91,13 @@ model Booking {
   slotId         String        @db.Uuid
   status         BookingStatus @default(ACTIVE)
 
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   cancelledAt DateTime?
 
-  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  member         OrganizationUser @relation(fields: [organizationId, memberId], references: [organizationId, id], onDelete: NoAction)
-  slot           MentorSlot       @relation("BookingSlot", fields: [organizationId, slotId], references: [organizationId, id], onDelete: NoAction)
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  member       OrganizationUser @relation(fields: [organizationId, memberId], references: [organizationId, id], onDelete: NoAction)
+  slot         MentorSlot       @relation("BookingSlot", fields: [organizationId, slotId], references: [organizationId, id], onDelete: NoAction)
 
   @@unique([slotId], where: { status: "ACTIVE" }) // This restricts only 1 active booking for a slot
 }
@@ -109,22 +109,38 @@ enum IdempotencyStatus {
 }
 
 model IdempotencyKey {
-  id              String            @id @default(uuid()) @db.Uuid
-  organizationId  String            @db.Uuid
-  action          String            @db.VarChar(100)
-  idempotencyKey  String            @db.VarChar(255)
-  requestHash     String            @db.Char(64)
-  status          IdempotencyStatus @default(STARTED)
-  responseCode    Int?              @db.SmallInt
-  responseBody    Json?
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @db.Uuid
+  action         String            @db.VarChar(100)
+  idempotencyKey String            @db.VarChar(255)
+  requestHash    String            @db.Char(64)
+  status         IdempotencyStatus @default(STARTED)
+  responseCode   Int?              @db.SmallInt
+  responseBody   Json?
 
-  lockedAt        DateTime          @default(now()) @db.Timestamptz
-  updatedAt       DateTime          @default(now()) @updatedAt @db.Timestamptz
+  lockedAt  DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz
 
-
-  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   // Critical for preventing race conditions across concurrent servers
   @@unique([organizationId, action, idempotencyKey], name: "uniqueTenantActionKey")
   @@index([organizationId, idempotencyKey])
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+}
+
+model OutboxEvent {
+  id          String       @id @default(uuid()) @db.Uuid
+  eventType   String
+  aggregateId String
+  payload     Json
+  status      OutboxStatus @default(PENDING)
+  createdAt   DateTime     @default(now())
+  publishedAt DateTime?
+
+  @@index([status, createdAt])
 }

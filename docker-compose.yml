@@ -35,6 +35,23 @@ services:
       timeout: 5s
       retries: 5
 
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: chronus-rabbitmq
+    ports:
+      - "5672:5672"     # AMQP protocol port
+      - "15672:15672"   # Management Dashboard UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   api:
     build:
       context: .
@@ -47,12 +64,68 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgres://postgres:password@postgres:5432/chronus_db
       REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       JWT_SECRET: super-secret-key-change-in-production
       PORT: 3010
+      RUN_SEED: "true" # Need to disable this for true production deployment
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3010/api/v1/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  event-publisher-worker:
+    build:
+      context: .
+      dockerfile: apps/event-publisher-worker/Dockerfile
+    container_name: chronus-event-publisher-worker
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://postgres:password@postgres:5432/chronus_db
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      POLL_INTERVAL_MS: 2000
+      BATCH_SIZE: 50
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'node dist/index.js' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  notification-worker:
+    build:
+      context: .
+      dockerfile: apps/notification-worker/Dockerfile
+    container_name: chronus-notification-worker
+    environment:
+      NODE_ENV: production
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      PREFETCH_COUNT: 10
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'node dist/index.js' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      api:
         condition: service_healthy
 
   web:
@@ -64,9 +137,18 @@ services:
     container_name: chronus-web
     ports:
       - "80:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:80/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   postgres_data:
   redis_data:
+  rabbitmq_data:
+
