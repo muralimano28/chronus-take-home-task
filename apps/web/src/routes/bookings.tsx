@@ -10,7 +10,7 @@ import { CancelBookingDialog } from "@/components/cancel-booking-dialog";
 import { LogOut, MoreHorizontal, Globe, ArrowLeft, Loader2, AlertCircle, Calendar } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { formatDateInTimezone, formatTimeInTimezone } from "@/lib/date-utils";
+import { formatDateInTimezone, formatTimeInTimezone } from "@chronus/utils";
 import { ThemeToggle } from "@/lib/theme-context";
 
 export const Route = createFileRoute("/bookings")({

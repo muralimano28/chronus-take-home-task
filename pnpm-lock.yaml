@@ -39,6 +39,9 @@ importers:
       '@chronus/redis':
         specifier: workspace:*
         version: link:../../packages/redis
+      '@chronus/utils':
+        specifier: workspace:*
+        version: link:../../packages/utils
       cookie-parser:
         specifier: ^1.4.7
         version: 1.4.7
@@ -103,6 +106,9 @@ importers:
       '@chronus/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@chronus/utils':
+        specifier: workspace:*
+        version: link:../../packages/utils
       '@tanstack/react-router':
         specifier: ^1.112.0
         version: 1.170.32(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -262,6 +268,18 @@ importers:
       '@types/react-dom':
         specifier: ^18.3.0
         version: 18.3.7(@types/react@18.3.31)
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+
+  packages/utils:
+    devDependencies:
+      '@chronus/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+      '@types/node':
+        specifier: ^20.14.9
+        version: 20.19.43
       typescript:
         specifier: ^5.5.4
         version: 5.9.3

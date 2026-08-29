@@ -12,6 +12,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "@chronus/ui": "workspace:*",
+    "@chronus/utils": "workspace:*",
     "lucide-react": "^0.475.0",
     "@tanstack/react-router": "^1.112.0",
     "axios": "^1.7.9"

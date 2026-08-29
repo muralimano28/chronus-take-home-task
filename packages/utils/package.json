@@ -1,0 +1,16 @@
+{
+  "name": "@chronus/utils",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "@chronus/tsconfig": "workspace:*",
+    "@types/node": "^20.14.9",
+    "typescript": "^5.5.4"
+  }
+}

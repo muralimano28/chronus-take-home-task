@@ -8,7 +8,7 @@ import {
 import { Loader2, AlertCircle, Calendar, Globe } from "lucide-react";
 import { Mentor } from "./mentors-list";
 import { Slot } from "./book-session-sheet";
-import { formatDateInTimezone, formatTimeInTimezone } from "@/lib/date-utils";
+import { formatDateInTimezone, formatTimeInTimezone } from "@chronus/utils";
 
 // Need to refactor these
 

@@ -6,7 +6,7 @@ import {
 } from "@chronus/ui";
 import { Loader2, AlertCircle, Calendar, Globe } from "lucide-react";
 import { Mentor } from "./mentors-list";
-import { formatDateInTimezone, formatTimeInTimezone } from "@/lib/date-utils";
+import { formatDateInTimezone, formatTimeInTimezone } from "@chronus/utils";
 
 export interface Slot {
   id: string;
