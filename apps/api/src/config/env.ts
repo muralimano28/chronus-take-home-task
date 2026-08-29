@@ -8,6 +8,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(3010),
   JWT_SECRET: z.string().min(1, "JWT_SECRET must not be empty"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL must not be empty"),
+  REDIS_URL: z.string().default("redis://localhost:6379"),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);

@@ -68,8 +68,8 @@ describe("Mentor tenant isolation", () => {
             userA,
         } = await createTenantFixture();
 
-        // Create 3 additional mentors in organizationA
-        for (let i = 1; i <= 3; i++) {
+        // Create 14 additional mentors in organizationA (total 15 mentors: mentorA + 14)
+        for (let i = 1; i <= 14; i++) {
             const user = await prisma.user.create({
                 data: {
                     email: `extra-mentor-${i}-${Date.now()}@example.com`,
@@ -97,33 +97,33 @@ describe("Mentor tenant isolation", () => {
             organizationName: organizationA.name,
         });
 
-        // 1. Fetch page 1 with limit 2 (total should be 4 mentors: mentorA + 3 extra)
+        // 1. Fetch page 1 with limit 10 (total should be 15 mentors: mentorA + 14 extra)
         const page1Response = await request(app)
-            .get("/api/v1/mentors?page=1&limit=2")
+            .get("/api/v1/mentors?page=1&limit=10")
             .set("Cookie", [`token=${token}`]);
 
         expect(page1Response.status).toBe(200);
         expect(page1Response.body.pagination).toEqual({
-            total: 4,
+            total: 15,
             page: 1,
-            limit: 2,
+            limit: 10,
             totalPages: 2,
         });
-        expect(page1Response.body.data).toHaveLength(2);
+        expect(page1Response.body.data).toHaveLength(10);
 
-        // 2. Fetch page 2 with limit 2
+        // 2. Fetch page 2 with limit 10
         const page2Response = await request(app)
-            .get("/api/v1/mentors?page=2&limit=2")
+            .get("/api/v1/mentors?page=2&limit=10")
             .set("Cookie", [`token=${token}`]);
 
         expect(page2Response.status).toBe(200);
         expect(page2Response.body.pagination).toEqual({
-            total: 4,
+            total: 15,
             page: 2,
-            limit: 2,
+            limit: 10,
             totalPages: 2,
         });
-        expect(page2Response.body.data).toHaveLength(2);
+        expect(page2Response.body.data).toHaveLength(5);
 
         // Ensure page 1 and page 2 returned distinct sets
         const page1Ids = page1Response.body.data.map((m: { membershipId: string }) => m.membershipId);

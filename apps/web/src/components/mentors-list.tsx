@@ -42,7 +42,7 @@ export function MentorsList() {
     let active = true;
     setLoading(true);
     api
-      .get<PaginatedMentorsResponse>(`/mentors?page=${page}&limit=6`)
+      .get<PaginatedMentorsResponse>(`/mentors?page=${page}&limit=10`)
       .then((res) => {
         if (active) {
           setMentors(res.data.data);

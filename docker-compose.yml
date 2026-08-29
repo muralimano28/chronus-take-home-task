@@ -20,6 +20,21 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: chronus-redis
+    ports:
+      - "6379:6379"
+    # we are setting allkeys-lru flag to evict least recently used keys when memory usage reaches 256mb
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   api:
     build:
       context: .
@@ -31,10 +46,13 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: postgres://postgres:password@postgres:5432/chronus_db
+      REDIS_URL: redis://redis:6379
       JWT_SECRET: super-secret-key-change-in-production
       PORT: 3010
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   web:
@@ -51,3 +69,4 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:

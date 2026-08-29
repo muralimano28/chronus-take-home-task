@@ -1,10 +1,30 @@
 import { Response, Router } from "express";
 import { prisma } from "@chronus/db";
+import { redis } from "@chronus/redis";
 import { requireAuth, AuthenticatedRequest } from "../middleware/auth";
 import { isValidUuid } from "../utils/validation";
 import { runIdempotent } from "../services/idempotency";
 
 const router = Router();
+
+/**
+ * Increments the mentor's availability slots cache version in Redis with retry logic.
+ */
+async function bumpMentorSlotsVersion(organizationId: string, mentorId: string, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await redis.incr(`org:${organizationId}:mentor:${mentorId}:slots:version`);
+      return;
+    } catch (err) {
+      if (attempt === maxRetries) {
+        console.warn(`[Redis Invalidation Error] Failed to bump slots version for mentor ${mentorId} after ${maxRetries} attempts:`, err);
+      } else {
+        // Exponential backoff: 50ms, 100ms, etc.
+        await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+      }
+    }
+  }
+}
 
 /**
  * GET /bookings
@@ -218,6 +238,11 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
       res.setHeader("x-idempotent-replayed", "true");
       res.status(200).json(result.body);
     } else {
+      // Invalidate cached mentor availability slots by incrementing the version (with retries)
+      const mentorId = result.body?.slot?.mentor?.membershipId;
+      if (mentorId) {
+        bumpMentorSlotsVersion(organizationId, mentorId);
+      }
       res.status(result.statusCode).json(result.body);
     }
   } catch (error: any) {
@@ -380,6 +405,11 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
       res.setHeader("x-idempotent-replayed", "true");
       res.status(200).json(result.body);
     } else {
+      // Invalidate cached mentor availability slots by incrementing the version (with retries)
+      const mentorId = result.body?.slot?.mentor?.membershipId;
+      if (mentorId) {
+        bumpMentorSlotsVersion(organizationId, mentorId);
+      }
       res.status(result.statusCode).json(result.body);
     }
   } catch (error: any) {
@@ -414,6 +444,8 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
   }
 
   try {
+    let oldMentorId: string | null = null;
+
     const result = await runIdempotent({
       organizationId,
       action: "reschedule_booking",
@@ -432,6 +464,9 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
         // 1. Fetch current booking
         const booking = await tx.booking.findUnique({
           where: { id: bookingId },
+          include: {
+            slot: true,
+          },
         });
 
         // Enforce tenant isolation and ownership check:
@@ -577,6 +612,9 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
           },
         });
 
+        // 3. Capture the old mentor ID in closure only after all DB operations succeed
+        oldMentorId = booking.slot.mentorId;
+
         return {
           statusCode: 200,
           body: formatBookingResponse(bookingRecord),
@@ -588,6 +626,18 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
       res.setHeader("x-idempotent-replayed", "true");
       res.status(200).json(result.body);
     } else {
+      // Invalidate cached availability slots for both old and new mentors (deduplicating if the same mentor)
+      const newMentorId = result.body?.slot?.mentor?.membershipId;
+
+      const mentorIdsToInvalidate = new Set<string>();
+      if (oldMentorId) mentorIdsToInvalidate.add(oldMentorId);
+      if (newMentorId) mentorIdsToInvalidate.add(newMentorId);
+
+      // (unawaited fire-and-forget)
+      for (const mId of mentorIdsToInvalidate) {
+        bumpMentorSlotsVersion(organizationId, mId);
+      }
+
       res.status(result.statusCode).json(result.body);
     }
   } catch (error: any) {
