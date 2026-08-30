@@ -398,3 +398,25 @@ Decision 64 — Full-Jitter Exponential Backoff in Outbox Polling Loop
 Why: To eliminate tight 2Hz error retry loops and log flooding when downstream infrastructure (PostgreSQL, RabbitMQ) is down:
 * **Consecutive Error Tracking**: `startOutboxWorker()` maintains a `consecutiveErrors` counter that automatically resets to `0` upon any successful batch processing.
 * **Full-Jitter Backoff**: On unhandled loop errors, backoff delay scales exponentially ($\text{delay} = \text{random}(0, \min(30000, 500 \times 2^{\text{consecutiveErrors}-1}))$) rather than static 500ms intervals, mitigating retry storms while waiting for infrastructure to recover.
+
+Decision 65 — Optimistic Concurrency Checks on Booking Cancellation
+Why: To prevent race conditions where concurrent cancellation retries could erroneously mark an already re-booked slot as available:
+* **Atomic State Predicate on Booking**: `tx.booking.update` asserts `where: { id: bookingId, organizationId, status: "ACTIVE" }` so that only currently active bookings can be transitioned to `CANCELLED`.
+* **Atomic State Predicate on Slot**: `tx.mentorSlot.update` asserts `where: { id: booking.slotId, organizationId, status: "BOOKED" }` ensuring a slot is only freed to `AVAILABLE` if it is still booked by this transaction's target session.
+* **P2025 Conflict Handling**: If another concurrent request altered the booking or slot state before the transaction executed, Prisma safely throws `P2025`, which the controller catches to return `409 Conflict` (`"Booking is no longer active or has already been cancelled."`) with zero corrupted slot state.
+
+Decision 66 — Optimistic `slotId` & `status` Predicates on Booking Reschedule
+Why: To prevent concurrent reschedule race conditions from orphaning newly reserved slots as permanently `BOOKED`, preventing past session recycling, and preventing cancelled booking resurrection:
+* **Current Slot Past-Date Validation**: `POST /bookings/:bookingId/reschedule` enforces `booking.slot.startTime >= new Date()`, preventing expired past sessions from being rescheduled to future dates.
+* **Atomic Old Slot Release**: `tx.mentorSlot.update` asserts `where: { id: booking.slotId, organizationId, status: "BOOKED" }` before transitioning the previous slot to `AVAILABLE`.
+* **Optimistic `slotId` & `status` Assertion**: `tx.booking.update` asserts `where: { id: bookingId, organizationId, slotId: booking.slotId, status: "ACTIVE" }`. If two concurrent reschedules to different slots race, only the first successfully commits. The second fails atomically on the `slotId` mismatch, aborts its transaction, and rolls back its slot reservation without leaving any orphaned `BOOKED` slots in the database.
+
+Decision 67 — Optimistic Fencing Token on Idempotency Commit
+Why: To prevent zombie/stalled transactions from committing stale or duplicate state after their lease window expires:
+* **Atomic Fencing Assertion**: `tx.idempotencyKey.update` in `runIdempotent` asserts `where: { id: recordId, status: "STARTED", lockedAt: currentLockTimestamp }`.
+* **Lease Breakage Defense**: If a transaction stalls past the 30-second lease window and another node reclaims the key, the stalled transaction's completion update fails atomically with `P2025`, automatically rolling back the entire business transaction and eliminating split-brain concurrency.
+
+Decision 68 — Per-Member Idempotency Key Isolation & Information Disclosure Prevention
+Why: To eliminate cross-user idempotency key collision vulnerabilities and prevent private booking responses from leaking between distinct members within the same organization:
+* **Membership-Scoped Uniqueness**: Added `membershipId` (foreign key to `OrganizationUser`) to the `IdempotencyKey` model with composite unique constraint `@@unique([organizationId, membershipId, action, idempotencyKey], name: "uniqueTenantMemberActionKey")`.
+* **Tenant & Actor Boundaries**: `runIdempotent` requires `membershipId` extracted from authoritative database session state. If Member B submits a request with the same idempotency key as Member A, the requests are isolated into separate keyspaces, preventing Member B from receiving Member A's cached response body (PII/booking ID) and ensuring business handlers evaluate independently.

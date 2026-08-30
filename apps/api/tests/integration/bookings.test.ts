@@ -275,6 +275,57 @@ describe("POST /api/v1/bookings", () => {
         expect(secondResponse.body.id).toBe(bookingId);
     });
 
+    it("prevents cross-user idempotency key collisions and private data leakage", async () => {
+        const { organization, memberA, userA, memberB, userB, slot } = await createBookingFixture();
+
+        const tokenA = createTestToken({
+            membershipId: memberA.id,
+            userId: userA.id,
+            organizationId: organization.id,
+            isMentor: false,
+            timezone: memberA.timezone,
+            name: userA.name,
+            email: userA.email,
+            organizationName: organization.name,
+        });
+
+        const tokenB = createTestToken({
+            membershipId: memberB.id,
+            userId: userB.id,
+            organizationId: organization.id,
+            isMentor: false,
+            timezone: memberB.timezone,
+            name: userB.name,
+            email: userB.email,
+            organizationName: organization.name,
+        });
+
+        const sharedKey = "cross-user-collision-key";
+
+        // 1. Member A books slot with the shared idempotency key
+        const resA = await request(app)
+            .post("/api/v1/bookings")
+            .set("Cookie", [`token=${tokenA}`])
+            .set("Idempotency-Key", sharedKey)
+            .send({ slotId: slot.id });
+
+        expect(resA.status).toBe(201);
+        expect(resA.body.member.name).toBe(userA.name);
+
+        // 2. Member B sends a request for the same slot with the EXACT same idempotency key
+        const resB = await request(app)
+            .post("/api/v1/bookings")
+            .set("Cookie", [`token=${tokenB}`])
+            .set("Idempotency-Key", sharedKey)
+            .send({ slotId: slot.id });
+
+        // 🛡️ Member B MUST NOT receive Member A's cached booking response (no data leak)
+        // Instead, Member B's handler runs against the DB and receives 409 Conflict because the slot is taken
+        expect(resB.status).toBe(409);
+        expect(resB.headers["x-idempotent-replayed"]).toBeUndefined();
+        expect(resB.body.error).toContain("Slot is no longer available");
+    });
+
     it("rejects request if the same idempotency key is retried with a different slotId", async () => {
         const {
             organization,
@@ -359,6 +410,7 @@ describe("POST /api/v1/bookings", () => {
             data: {
                 id: crypto.randomUUID(),
                 organizationId: organization.id,
+                membershipId: memberA.id,
                 action: "create_booking",
                 idempotencyKey,
                 requestHash: crypto.createHash("sha256").update(JSON.stringify({ slotId: slot.id })).digest("hex"),
@@ -383,8 +435,9 @@ describe("POST /api/v1/bookings", () => {
         // Verify the key is now COMPLETED in db
         const keyInDb = await prisma.idempotencyKey.findUnique({
             where: {
-                uniqueTenantActionKey: {
+                uniqueTenantMemberActionKey: {
                     organizationId: organization.id,
+                    membershipId: memberA.id,
                     action: "create_booking",
                     idempotencyKey,
                 },
@@ -479,6 +532,7 @@ describe("POST /api/v1/bookings", () => {
         await prisma.idempotencyKey.create({
             data: {
                 organizationId: organization.id,
+                membershipId: memberA.id,
                 action: "create_booking",
                 idempotencyKey,
                 requestHash,
@@ -526,8 +580,9 @@ describe("POST /api/v1/bookings", () => {
         // Verify the key transitioned to COMPLETED
         const keyRecord = await prisma.idempotencyKey.findUnique({
             where: {
-                uniqueTenantActionKey: {
+                uniqueTenantMemberActionKey: {
                     organizationId: organization.id,
+                    membershipId: memberA.id,
                     action: "create_booking",
                     idempotencyKey,
                 },
@@ -1061,6 +1116,89 @@ describe("POST /api/v1/bookings/:bookingId/cancel", () => {
         expect(secondCancel.body.status).toBe("CANCELLED");
     });
 
+    it("ensures cancellation retry after slot is re-booked by another member does NOT corrupt slot availability", async () => {
+        const { organization, memberA, userA, memberB, userB, mentor, slot } = await createBookingFixture();
+
+        const tokenA = createTestToken({
+            membershipId: memberA.id,
+            userId: userA.id,
+            organizationId: organization.id,
+            isMentor: false,
+            timezone: memberA.timezone,
+            name: userA.name,
+            email: userA.email,
+            organizationName: organization.name,
+        });
+
+        const tokenB = createTestToken({
+            membershipId: memberB.id,
+            userId: userB.id,
+            organizationId: organization.id,
+            isMentor: false,
+            timezone: memberB.timezone,
+            name: userB.name,
+            email: userB.email,
+            organizationName: organization.name,
+        });
+
+        // Step 1: Member A books Slot X (Booking 1)
+        const bookResponseA = await request(app)
+            .post("/api/v1/bookings")
+            .set("Cookie", [`token=${tokenA}`])
+            .set("Idempotency-Key", "member-a-initial-book")
+            .send({ slotId: slot.id });
+        expect(bookResponseA.status).toBe(201);
+        const bookingIdA = bookResponseA.body.id;
+
+        // Step 2 & 3: Member A cancels Booking 1 -> Slot X transitions to AVAILABLE, Booking 1 is CANCELLED
+        const cancelResponseA = await request(app)
+            .post(`/api/v1/bookings/${bookingIdA}/cancel`)
+            .set("Cookie", [`token=${tokenA}`])
+            .set("Idempotency-Key", "member-a-initial-cancel");
+        expect(cancelResponseA.status).toBe(200);
+        expect(cancelResponseA.body.status).toBe("CANCELLED");
+
+        const slotAfterCancel = await prisma.mentorSlot.findUnique({
+            where: { id: slot.id },
+        });
+        expect(slotAfterCancel?.status).toBe("AVAILABLE");
+
+        // Step 4: Member B immediately books Slot X (Booking 2 is created, Slot X becomes BOOKED)
+        const bookResponseB = await request(app)
+            .post("/api/v1/bookings")
+            .set("Cookie", [`token=${tokenB}`])
+            .set("Idempotency-Key", "member-b-rebook-slot")
+            .send({ slotId: slot.id });
+        expect(bookResponseB.status).toBe(201);
+        const bookingIdB = bookResponseB.body.id;
+
+        const slotAfterRebook = await prisma.mentorSlot.findUnique({
+            where: { id: slot.id },
+        });
+        expect(slotAfterRebook?.status).toBe("BOOKED");
+
+        // Step 5: A delayed/retry cancellation request for Booking 1 arrives from Member A (with new idempotency key)
+        const delayedCancelResponseA = await request(app)
+            .post(`/api/v1/bookings/${bookingIdA}/cancel`)
+            .set("Cookie", [`token=${tokenA}`])
+            .set("Idempotency-Key", "member-a-delayed-retry-cancel");
+        expect(delayedCancelResponseA.status).toBe(200);
+        expect(delayedCancelResponseA.body.status).toBe("CANCELLED");
+
+        // 🛡️ CRITICAL ASSERTION: Slot X MUST STILL BE BOOKED in DB by Member B!
+        // It must NOT have been corrupted back to AVAILABLE by Booking 1's delayed cancellation!
+        const finalSlotInDb = await prisma.mentorSlot.findUnique({
+            where: { id: slot.id },
+        });
+        expect(finalSlotInDb?.status).toBe("BOOKED");
+
+        // Verify Member B's booking remains ACTIVE
+        const bookingBInDb = await prisma.booking.findUnique({
+            where: { id: bookingIdB },
+        });
+        expect(bookingBInDb?.status).toBe("ACTIVE");
+    });
+
     it("rejects cancellation if the booking slot is in the past", async () => {
         const {
             organization,
@@ -1264,6 +1402,142 @@ describe("POST /api/v1/bookings/:bookingId/reschedule", () => {
         expect(oldSlot?.status).toBe("AVAILABLE"); // Freed
         expect(newSlot?.status).toBe("BOOKED");    // Reserved
         expect(bookingInDb?.slotId).toBe(slotB.id);
+    });
+
+    it("prevents concurrent reschedule requests from orphaning slots", async () => {
+        const { organization, memberA, userA, mentor, slot } = await createBookingFixture();
+
+        // Create Slot 2 and Slot 3
+        const start2 = new Date(slot.startTime.getTime() + 2 * 60 * 60 * 1000);
+        const end2 = new Date(slot.endTime.getTime() + 2 * 60 * 60 * 1000);
+        const slot2 = await prisma.mentorSlot.create({
+            data: {
+                organizationId: organization.id,
+                mentorId: mentor.id,
+                startTime: start2,
+                endTime: end2,
+                status: "AVAILABLE",
+            },
+        });
+
+        const start3 = new Date(slot.startTime.getTime() + 4 * 60 * 60 * 1000);
+        const end3 = new Date(slot.endTime.getTime() + 4 * 60 * 60 * 1000);
+        const slot3 = await prisma.mentorSlot.create({
+            data: {
+                organizationId: organization.id,
+                mentorId: mentor.id,
+                startTime: start3,
+                endTime: end3,
+                status: "AVAILABLE",
+            },
+        });
+
+        const token = createTestToken({
+            membershipId: memberA.id,
+            userId: userA.id,
+            organizationId: organization.id,
+            isMentor: false,
+            timezone: memberA.timezone,
+            name: userA.name,
+            email: userA.email,
+            organizationName: organization.name,
+        });
+
+        // 1. Book Slot 1
+        const bookResponse = await request(app)
+            .post("/api/v1/bookings")
+            .set("Cookie", [`token=${token}`])
+            .set("Idempotency-Key", "reschedule-race-book-1")
+            .send({ slotId: slot.id });
+        expect(bookResponse.status).toBe(201);
+        const bookingId = bookResponse.body.id;
+
+        // 2. Concurrently attempt to reschedule Booking 1 to Slot 2 AND Slot 3
+        const [reschedule1, reschedule2] = await Promise.all([
+            request(app)
+                .post(`/api/v1/bookings/${bookingId}/reschedule`)
+                .set("Cookie", [`token=${token}`])
+                .set("Idempotency-Key", "reschedule-to-slot-2")
+                .send({ newSlotId: slot2.id }),
+            request(app)
+                .post(`/api/v1/bookings/${bookingId}/reschedule`)
+                .set("Cookie", [`token=${token}`])
+                .set("Idempotency-Key", "reschedule-to-slot-3")
+                .send({ newSlotId: slot3.id }),
+        ]);
+
+        const statuses = [reschedule1.status, reschedule2.status];
+        expect(statuses).toContain(200);
+
+        // 3. Verify in DB:
+        // Exactly ONE slot (either Slot 2 or Slot 3) is BOOKED, the other is AVAILABLE, and Slot 1 is AVAILABLE
+        const [dbSlot1, dbSlot2, dbSlot3, dbBooking] = await Promise.all([
+            prisma.mentorSlot.findUnique({ where: { id: slot.id } }),
+            prisma.mentorSlot.findUnique({ where: { id: slot2.id } }),
+            prisma.mentorSlot.findUnique({ where: { id: slot3.id } }),
+            prisma.booking.findUnique({ where: { id: bookingId } }),
+        ]);
+
+        expect(dbSlot1?.status).toBe("AVAILABLE");
+
+        // Exactly one new slot is BOOKED, matching the booking's slotId
+        if (dbBooking?.slotId === slot2.id) {
+            expect(dbSlot2?.status).toBe("BOOKED");
+            expect(dbSlot3?.status).toBe("AVAILABLE"); // NOT orphaned!
+        } else {
+            expect(dbBooking?.slotId).toBe(slot3.id);
+            expect(dbSlot3?.status).toBe("BOOKED");
+            expect(dbSlot2?.status).toBe("AVAILABLE"); // NOT orphaned!
+        }
+    });
+
+    it("rejects rescheduling a booking if the current slot is in the past", async () => {
+        const { organization, memberA, userA, mentor, slot } = await createBookingFixture();
+
+        // Create a past slot and an active booking for it
+        const pastStart = new Date(Date.now() - 3 * 60 * 60 * 1000);
+        const pastEnd = new Date(Date.now() - 2 * 60 * 60 * 1000);
+        const pastSlot = await prisma.mentorSlot.create({
+            data: {
+                organizationId: organization.id,
+                mentorId: mentor.id,
+                startTime: pastStart,
+                endTime: pastEnd,
+                status: "BOOKED",
+            },
+        });
+
+        const pastBooking = await prisma.booking.create({
+            data: {
+                organizationId: organization.id,
+                memberId: memberA.id,
+                slotId: pastSlot.id,
+                slotStartTime: pastSlot.startTime,
+                slotEndTime: pastSlot.endTime,
+                status: "ACTIVE",
+            },
+        });
+
+        const token = createTestToken({
+            membershipId: memberA.id,
+            userId: userA.id,
+            organizationId: organization.id,
+            isMentor: false,
+            timezone: memberA.timezone,
+            name: userA.name,
+            email: userA.email,
+            organizationName: organization.name,
+        });
+
+        // Attempt to reschedule past booking to a future slot
+        const response = await request(app)
+            .post(`/api/v1/bookings/${pastBooking.id}/reschedule`)
+            .set("Cookie", [`token=${token}`])
+            .set("Idempotency-Key", "reschedule-past-booking")
+            .send({ newSlotId: slot.id });
+
+        expect(response.status).toBe(400);
+        expect(response.body.error).toContain("Cannot reschedule a booking that is already in the past");
     });
 
     it("rejects reschedule if the new slot belongs to a different organization", async () => {

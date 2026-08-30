@@ -42,10 +42,11 @@ model OrganizationUser {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user         User         @relation(fields: [userId], references: [id], onDelete: NoAction)
-  mentorSlots  MentorSlot[]
-  bookings     Booking[]
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user            User             @relation(fields: [userId], references: [id], onDelete: NoAction)
+  mentorSlots     MentorSlot[]
+  bookings        Booking[]
+  idempotencyKeys IdempotencyKey[]
 
   // In the below line, id refers to the id of the OrganizationUser model. As it is unique, [organizationId, id] will also be unique.
   // But PostgreSQL requires the columns referenced by a foreign key to have a unique constraint/index matching the referenced column set.
@@ -115,6 +116,7 @@ enum IdempotencyStatus {
 model IdempotencyKey {
   id             String            @id @default(uuid()) @db.Uuid
   organizationId String            @db.Uuid
+  membershipId   String            @db.Uuid
   action         String            @db.VarChar(100)
   idempotencyKey String            @db.VarChar(255)
   requestHash    String            @db.Char(64)
@@ -125,11 +127,12 @@ model IdempotencyKey {
   lockedAt  DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  member       OrganizationUser @relation(fields: [membershipId], references: [id], onDelete: Cascade)
 
-  // Critical for preventing race conditions across concurrent servers
-  @@unique([organizationId, action, idempotencyKey], name: "uniqueTenantActionKey")
-  @@index([organizationId, idempotencyKey])
+  // Critical for preventing cross-user collision, leaking booking data, and race conditions across concurrent servers
+  @@unique([organizationId, membershipId, action, idempotencyKey], name: "uniqueTenantMemberActionKey")
+  @@index([organizationId, membershipId, idempotencyKey])
 }
 
 enum OutboxStatus {

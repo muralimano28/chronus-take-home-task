@@ -126,6 +126,7 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
   try {
     const result = await runIdempotent({
       organizationId,
+      membershipId,
       action: "create_booking",
       idempotencyKey,
       payload: { slotId },
@@ -292,9 +293,15 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
         return;
       }
 
-      // Check for PostgreSQL exclusion constraint violation (error code 23P01) or custom constraint name
+      // Check for PostgreSQL exclusion constraint violation (error code 23P01 / 40P01 / 40001 / P2034) or custom constraint name
       const isExclusionViolation =
         error.code === "23P01" ||
+        error.code === "P2034" ||
+        error.code === "40P01" ||
+        error.code === "40001" ||
+        error.meta?.driverAdapterError?.cause?.originalCode === "23P01" ||
+        error.meta?.driverAdapterError?.cause?.originalCode === "40P01" ||
+        error.meta?.driverAdapterError?.cause?.originalCode === "40001" ||
         (error.meta?.message && error.meta.message.includes("no_overlapping_active_member_bookings")) ||
         (error.message && error.message.includes("no_overlapping_active_member_bookings"));
 
@@ -360,6 +367,7 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
   try {
     const result = await runIdempotent({
       organizationId,
+      membershipId,
       action: "cancel_booking",
       idempotencyKey,
       payload: { bookingId },
@@ -423,26 +431,12 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
           throw err;
         }
 
-        // Free up the slot
-        await tx.mentorSlot.update({
-          where: {
-            organizationId_id: {
-              organizationId,
-              id: booking.slotId,
-            },
-          },
-          data: {
-            status: "AVAILABLE",
-          },
-        });
-
-        // Mark the booking as cancelled
+        // 1. Mark the booking as cancelled (optimistically checking status: ACTIVE)
         const cancelledBooking = await tx.booking.update({
           where: {
-            organizationId_id: {
-              organizationId,
-              id: bookingId,
-            },
+            id: bookingId,
+            organizationId,
+            status: "ACTIVE",
           },
           data: {
             status: "CANCELLED",
@@ -473,6 +467,18 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
                 },
               },
             },
+          },
+        });
+
+        // 2. Free up the slot (optimistically checking status: BOOKED)
+        await tx.mentorSlot.update({
+          where: {
+            id: booking.slotId,
+            organizationId,
+            status: "BOOKED",
+          },
+          data: {
+            status: "AVAILABLE",
           },
         });
 
@@ -519,9 +525,21 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
       res.status(result.statusCode).json(result.body);
     }
   } catch (error: any) {
-    if (error && typeof error === "object" && typeof error.statusCode === "number") {
-      res.status(error.statusCode).json({ error: error.message });
-      return;
+    if (error && typeof error === "object") {
+      if (typeof error.statusCode === "number") {
+        res.status(error.statusCode).json({ error: error.message });
+        return;
+      }
+
+      // Record not found due to optimistic status mismatch (already cancelled or slot not booked)
+      if (error.code === "P2025") {
+        logger.warn("Booking cancellation rejected: booking or slot is no longer in valid state", {
+          event: "booking.cancellation_conflict",
+          bookingId,
+        });
+        res.status(409).json({ error: "Booking is no longer active or has already been cancelled." });
+        return;
+      }
     }
 
     logger.error(`Failed to cancel booking ${bookingId} for member ${membershipId} in org ${organizationId}:`, { error });
@@ -554,6 +572,7 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
 
     const result = await runIdempotent({
       organizationId,
+      membershipId,
       action: "reschedule_booking",
       idempotencyKey,
       payload: { bookingId, newSlotId },
@@ -595,6 +614,13 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
 
         if (booking.status !== "ACTIVE") {
           const err: any = new Error("Only active bookings can be rescheduled.");
+          err.statusCode = 400;
+          throw err;
+        }
+
+        // Business Rule: Cannot reschedule a booking whose slot is already in the past
+        if (booking.slot.startTime < new Date()) {
+          const err: any = new Error("Cannot reschedule a booking that is already in the past.");
           err.statusCode = 400;
           throw err;
         }
@@ -699,26 +725,26 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
           },
         });
 
-        // 2. Free up old slot
+        // 2. Free up old slot (optimistic check: status must be BOOKED)
         await tx.mentorSlot.update({
           where: {
-            organizationId_id: {
-              organizationId,
-              id: booking.slotId,
-            },
+            id: booking.slotId,
+            organizationId,
+            status: "BOOKED",
           },
           data: {
             status: "AVAILABLE",
           },
         });
 
-        // Update slot ID and time range on the existing booking
+        // 3. Atomically update booking, asserting that slotId has not changed and status is still ACTIVE
+        // (prevents concurrent reschedule races from orphaning slots, and prevents resurrecting cancelled bookings)
         const bookingRecord = await tx.booking.update({
           where: {
-            organizationId_id: {
-              organizationId,
-              id: bookingId,
-            },
+            id: bookingId,
+            organizationId,
+            slotId: booking.slotId,
+            status: "ACTIVE",
           },
           data: {
             slotId: newSlotId,
@@ -815,9 +841,15 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
         return;
       }
 
-      // Check for PostgreSQL exclusion constraint violation (error code 23P01) or custom constraint name
+      // Check for PostgreSQL exclusion constraint violation (error code 23P01 / 40P01 / 40001 / P2034) or custom constraint name
       const isExclusionViolation =
         error.code === "23P01" ||
+        error.code === "P2034" ||
+        error.code === "40P01" ||
+        error.code === "40001" ||
+        error.meta?.driverAdapterError?.cause?.originalCode === "23P01" ||
+        error.meta?.driverAdapterError?.cause?.originalCode === "40P01" ||
+        error.meta?.driverAdapterError?.cause?.originalCode === "40001" ||
         (error.meta?.message && error.meta.message.includes("no_overlapping_active_member_bookings")) ||
         (error.message && error.message.includes("no_overlapping_active_member_bookings"));
 

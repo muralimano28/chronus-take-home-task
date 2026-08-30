@@ -4,6 +4,7 @@ import { logger } from "../logger";
 
 interface IdempotentOptions<T> {
   organizationId: string;
+  membershipId: string;
   action: string;
   idempotencyKey: string;
   payload: any;
@@ -39,9 +40,9 @@ export function canonicalStringify(obj: any): string {
  * 
  * Flow:
  * 1. Computes the SHA-256 hash of the canonical request payload.
- * 2. Attempts to insert a STARTED record.
+ * 2. Attempts to insert a STARTED record scoped to the authenticated member in the organization.
  *    - If successful, executes the handler inside a transaction (or passes the tx context).
- *    - If unique constraint violation (key already exists):
+ *    - If unique constraint violation (key already exists for this member):
  *      - If COMPLETED, validates payload hash. If mismatch, throws 400. Replays cached response.
  *      - If STARTED, returns 409 Conflict.
  *      - If FAILED, updates status to STARTED and runs again.
@@ -49,7 +50,7 @@ export function canonicalStringify(obj: any): string {
 export async function runIdempotent<T>(
   options: IdempotentOptions<T>
 ): Promise<IdempotentResult<T>> {
-  const { organizationId, action, idempotencyKey, payload, handler } = options;
+  const { organizationId, membershipId, action, idempotencyKey, payload, handler } = options;
   let currentLockTimestamp: Date | null = null;
 
   // 1. Compute canonical deterministic request hash
@@ -61,11 +62,12 @@ export async function runIdempotent<T>(
   let recordId: string | null = null;
 
   try {
-    // 2. Try to insert a STARTED record
+    // 2. Try to insert a STARTED record scoped to (organizationId, membershipId, action, idempotencyKey)
     const record = await prisma.idempotencyKey.create({
       data: {
         id: crypto.randomUUID(),
         organizationId,
+        membershipId,
         action,
         idempotencyKey,
         requestHash,
@@ -78,7 +80,7 @@ export async function runIdempotent<T>(
     if (error.code === "P2002") {
       const existing = await prisma.idempotencyKey.findUnique({
         where: {
-          uniqueTenantActionKey: { organizationId, action, idempotencyKey },
+          uniqueTenantMemberActionKey: { organizationId, membershipId, action, idempotencyKey },
         },
       });
 
@@ -155,8 +157,13 @@ export async function runIdempotent<T>(
     const result = await prisma.$transaction(async (tx) => {
       const handlerRes = await handler(tx);
 
+      // Optimistically assert status is still STARTED and lock timestamp hasn't changed (fencing token protection)
       await tx.idempotencyKey.update({
-        where: { id: recordId! },
+        where: {
+          id: recordId!,
+          status: "STARTED",
+          lockedAt: currentLockTimestamp ?? undefined,
+        },
         data: {
           status: "COMPLETED",
           responseCode: handlerRes.statusCode,
