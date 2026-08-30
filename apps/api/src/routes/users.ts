@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "@chronus/db";
+import { logger } from "../logger";
 
 const router = Router();
 
@@ -48,7 +49,7 @@ router.get("/", async (req, res) => {
 
     res.status(200).json(formattedUsers);
   } catch (error) {
-    console.error("[API Error] Failed to fetch users:", error);
+    logger.error("Failed to fetch users:", { error });
     res.status(500).json({ error: "Internal server error." });
   }
 });

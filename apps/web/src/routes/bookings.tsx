@@ -7,11 +7,11 @@ import {
 } from "@chronus/ui";
 import { RescheduleSessionSheet } from "@/components/reschedule-session-sheet";
 import { CancelBookingDialog } from "@/components/cancel-booking-dialog";
-import { LogOut, MoreHorizontal, Globe, ArrowLeft, Loader2, AlertCircle, Calendar } from "lucide-react";
+import { MoreHorizontal, Loader2, AlertCircle, Calendar } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { formatDateInTimezone, formatTimeInTimezone } from "@chronus/utils";
-import { ThemeToggle } from "@/lib/theme-context";
+import { AuthenticatedLayout } from "@/components/authenticated-layout";
 
 export const Route = createFileRoute("/bookings")({
   component: BookingsPage,
@@ -36,9 +36,8 @@ interface Booking {
   }
 }
 
-
 function BookingsPage() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -47,10 +46,6 @@ function BookingsPage() {
   const [cancellingBookingId, setCancellingBookingId] = useState<string | null>(null);
 
   const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-  const handleLogout = async () => {
-    await logout();
-  };
 
   useEffect(() => {
     let active = true;
@@ -79,41 +74,11 @@ function BookingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col">
-      <header className="border-b border-border bg-card px-6 py-4 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-4">
-          <h1 className="text-xl font-bold tracking-tight text-foreground">
-            My Bookings
-          </h1>
-          <div className="h-4 w-px bg-border hidden sm:block" />
-          <Link to="/dashboard" className="text-sm font-medium text-muted-foreground hover:text-primary transition-colors hidden sm:flex items-center gap-1">
-            <ArrowLeft className="h-3 w-3" /> Back to Mentors
-          </Link>
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-sm font-medium text-muted-foreground">
-            Welcome, <span className="text-foreground font-semibold">{user.name}</span>
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleLogout}
-            className="flex items-center gap-2 text-destructive border-destructive/20 hover:bg-destructive/5 hover:text-destructive cursor-pointer"
-          >
-            <LogOut className="h-4 w-4" />
-            Log Out
-          </Button>
-          <ThemeToggle />
-        </div>
-      </header>
-
-      <main className="flex-1 p-8 max-w-4xl mx-auto w-full">
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h2 className="text-2xl font-bold text-foreground">Your Sessions</h2>
-            <p className="text-muted-foreground mt-1">Manage your upcoming and past mentorship sessions.</p>
-          </div>
-        </div>
+    <AuthenticatedLayout
+      title="My Bookings"
+      description="Manage your upcoming and past mentorship sessions"
+    >
+      <div className="max-w-4xl mx-auto w-full">
 
         {loading ? (
           <div className="flex justify-center items-center py-20">
@@ -158,15 +123,17 @@ function BookingsPage() {
                         </span>
                       </div>
 
-                      <div className="flex flex-col gap-1 mt-1">
+                      <div className="flex flex-col gap-2 mt-1">
                         <span className="text-sm font-medium flex items-center gap-1.5">
                           <Calendar className="h-3.5 w-3.5" />
-                          {formatDateInTimezone(start, userTimezone)} | {formatTimeInTimezone(start, userTimezone)} - {formatTimeInTimezone(end, userTimezone)} (Local)
+                          {formatDateInTimezone(start, userTimezone)} | {formatTimeInTimezone(start, userTimezone)} - {formatTimeInTimezone(end, userTimezone)} ({userTimezone})
                         </span>
-                        <span className="text-xs text-muted-foreground flex items-center gap-1.5">
-                          <Globe className="h-3 w-3" />
-                          {formatDateInTimezone(start, mentor.timezone)} | {formatTimeInTimezone(start, mentor.timezone)} - {formatTimeInTimezone(end, mentor.timezone)} ({mentor.timezone})
-                        </span>
+                        {user?.timezone && (
+                          <span className="text-xs text-muted-foreground flex items-center gap-1.5 pt-2.5 border-t ">
+                            <Calendar className="h-3.5 w-3.5" />
+                            {formatDateInTimezone(start, user.timezone)} | {formatTimeInTimezone(start, user.timezone)} - {formatTimeInTimezone(end, user.timezone)} ({user.timezone})
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -201,13 +168,28 @@ function BookingsPage() {
             })}
           </div>
         )}
-      </main>
 
-      {reschedulingBookingId && (
-        <RescheduleSessionSheet
-          bookingId={reschedulingBookingId}
-          open={!!reschedulingBookingId}
-          onOpenChange={(isOpen) => !isOpen && setReschedulingBookingId(null)}
+        {reschedulingBookingId && (
+          <RescheduleSessionSheet
+            bookingId={reschedulingBookingId}
+            open={!!reschedulingBookingId}
+            onOpenChange={(isOpen) => !isOpen && setReschedulingBookingId(null)}
+            onSuccess={() => {
+              setLoading(true);
+              api.get<Booking[]>("/bookings")
+                .then(res => {
+                  setBookings(res.data);
+                  setError(null);
+                })
+                .finally(() => setLoading(false));
+            }}
+          />
+        )}
+
+        <CancelBookingDialog
+          bookingId={cancellingBookingId}
+          open={!!cancellingBookingId}
+          onOpenChange={(isOpen) => !isOpen && setCancellingBookingId(null)}
           onSuccess={() => {
             setLoading(true);
             api.get<Booking[]>("/bookings")
@@ -218,22 +200,7 @@ function BookingsPage() {
               .finally(() => setLoading(false));
           }}
         />
-      )}
-
-      <CancelBookingDialog
-        bookingId={cancellingBookingId}
-        open={!!cancellingBookingId}
-        onOpenChange={(isOpen) => !isOpen && setCancellingBookingId(null)}
-        onSuccess={() => {
-          setLoading(true);
-          api.get<Booking[]>("/bookings")
-            .then(res => {
-              setBookings(res.data);
-              setError(null);
-            })
-            .finally(() => setLoading(false));
-        }}
-      />
-    </div>
+      </div>
+    </AuthenticatedLayout>
   );
 }

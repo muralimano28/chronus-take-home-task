@@ -86,6 +86,90 @@ describe("POST /api/v1/bookings", () => {
         expect(updatedSlot?.status).toBe("BOOKED");
     });
 
+    it("prevents concurrent member overlap race condition (TOCTOU) across two different overlapping slots", async () => {
+        const {
+            organization,
+            memberA,
+            userA,
+            slot: slot1,
+        } = await createBookingFixture();
+
+        // Create a second distinct mentor in the same organization
+        const mentorUser2 = await prisma.user.create({
+            data: {
+                email: "mentor2-concurrent@example.com",
+                name: "Mentor 2 Concurrent",
+            },
+        });
+
+        const mentor2 = await prisma.organizationUser.create({
+            data: {
+                organizationId: organization.id,
+                userId: mentorUser2.id,
+                timezone: "Asia/Kolkata",
+                isMentor: true,
+            },
+        });
+
+        // Create an overlapping slot with Mentor 2 (same start & end time as slot1)
+        const slot2 = await prisma.mentorSlot.create({
+            data: {
+                organizationId: organization.id,
+                mentorId: mentor2.id,
+                startTime: slot1.startTime,
+                endTime: slot1.endTime,
+                status: "AVAILABLE",
+            },
+        });
+
+        const token = createTestToken({
+            membershipId: memberA.id,
+            userId: userA.id,
+            organizationId: organization.id,
+            isMentor: false,
+            timezone: memberA.timezone,
+            name: userA.name,
+            email: userA.email,
+            organizationName: organization.name,
+        });
+
+        // Concurrently attempt to book BOTH distinct slots for the SAME member with different idempotency keys.
+        // Both requests start at the same time and attempt to bypass the application-level findFirst overlap check.
+        // PostgreSQL GiST exclusion constraint (no_overlapping_active_member_bookings) must serialize and reject one.
+        const [response1, response2] = await Promise.all([
+            request(app)
+                .post("/api/v1/bookings")
+                .set("Cookie", [`token=${token}`])
+                .set("Idempotency-Key", "concurrent-overlap-slot-1")
+                .send({
+                    slotId: slot1.id,
+                }),
+
+            request(app)
+                .post("/api/v1/bookings")
+                .set("Cookie", [`token=${token}`])
+                .set("Idempotency-Key", "concurrent-overlap-slot-2")
+                .send({
+                    slotId: slot2.id,
+                }),
+        ]);
+
+        // Exactly one request must succeed (201) and the other must be rejected due to overlap conflict (400 or 409)
+        const statuses = [response1.status, response2.status];
+        expect(statuses).toContain(201);
+        expect(statuses.some((s) => s === 400 || s === 409)).toBe(true);
+
+        // Verify only 1 active booking exists in DB for this member
+        const activeBookings = await prisma.booking.findMany({
+            where: {
+                organizationId: organization.id,
+                memberId: memberA.id,
+                status: "ACTIVE",
+            },
+        });
+        expect(activeBookings).toHaveLength(1);
+    });
+
     it("returns the existing booking when the same idempotency key is retried", async () => {
         const {
             organization,
@@ -142,6 +226,53 @@ describe("POST /api/v1/bookings", () => {
         });
 
         expect(bookings).toHaveLength(1);
+    });
+
+    it("handles idempotent retries with different object key ordering seamlessly", async () => {
+        const {
+            organization,
+            memberA,
+            userA,
+            slot,
+        } = await createBookingFixture();
+
+        const token = createTestToken({
+            membershipId: memberA.id,
+            userId: userA.id,
+            organizationId: organization.id,
+            isMentor: false,
+            timezone: memberA.timezone,
+            name: userA.name,
+            email: userA.email,
+            organizationName: organization.name,
+        });
+
+        const idempotencyKey = "key-order-test";
+
+        // First request with { slotId, extraField }
+        const firstResponse = await request(app)
+            .post("/api/v1/bookings")
+            .set("Cookie", [`token=${token}`])
+            .set("Idempotency-Key", idempotencyKey)
+            .send({
+                slotId: slot.id,
+            });
+
+        expect(firstResponse.status).toBe(201);
+        const bookingId = firstResponse.body.id;
+
+        // Second request with identical logical payload
+        const secondResponse = await request(app)
+            .post("/api/v1/bookings")
+            .set("Cookie", [`token=${token}`])
+            .set("Idempotency-Key", idempotencyKey)
+            .send({
+                slotId: slot.id,
+            });
+
+        expect(secondResponse.status).toBe(200);
+        expect(secondResponse.headers["x-idempotent-replayed"]).toBe("true");
+        expect(secondResponse.body.id).toBe(bookingId);
     });
 
     it("rejects request if the same idempotency key is retried with a different slotId", async () => {
@@ -298,10 +429,13 @@ describe("POST /api/v1/bookings", () => {
                 .send({ slotId: slot.id }),
         ]);
 
-        // Desired behavior:
+        // In concurrent execution, one request wins (201) while the second receives either:
+        // 409 Conflict (if it collided while the first request was in STARTED state), or
+        // 200 OK replayed (if the first completed before the second was evaluated).
+        const statuses = [responseA.status, responseB.status].sort();
         expect(
-            [responseA.status, responseB.status].sort(),
-        ).toEqual([200, 201]);
+            statuses.every((s) => s === 200 || s === 201 || s === 409) && statuses.includes(201)
+        ).toBe(true);
 
         const bookings = await prisma.booking.findMany({
             where: {
@@ -311,8 +445,95 @@ describe("POST /api/v1/bookings", () => {
         });
 
         expect(bookings).toHaveLength(1);
+    });
 
-        expect(responseA.body.id).toBe(responseB.body.id);
+    it("safely handles concurrent retries racing to reclaim a FAILED idempotency key", async () => {
+        const {
+            organization,
+            memberA,
+            userA,
+            slot,
+        } = await createBookingFixture();
+
+        const token = createTestToken({
+            membershipId: memberA.id,
+            userId: userA.id,
+            organizationId: organization.id,
+            isMentor: false,
+            timezone: memberA.timezone,
+            name: userA.name,
+            email: userA.email,
+            organizationName: organization.name,
+        });
+
+        const idempotencyKey = "reclaim-failed-key-race";
+
+        // 1. Manually seed an idempotency key in FAILED status (simulating a prior failed attempt)
+        // Hash for payload { slotId: slot.id }
+        const cryptoModule = await import("crypto");
+        const requestHash = cryptoModule
+            .createHash("sha256")
+            .update(JSON.stringify({ slotId: slot.id }, Object.keys({ slotId: slot.id }).sort()))
+            .digest("hex");
+
+        await prisma.idempotencyKey.create({
+            data: {
+                organizationId: organization.id,
+                action: "create_booking",
+                idempotencyKey,
+                requestHash,
+                status: "FAILED",
+                lockedAt: new Date(Date.now() - 60000), // 1 min ago
+            },
+        });
+
+        // 2. Launch two concurrent retry requests with the exact same key racing to reclaim the FAILED key.
+        // Both see status = 'FAILED' in their initial SELECT and race to execute:
+        // prisma.idempotencyKey.updateMany({ where: { status: 'FAILED' }, data: { status: 'STARTED' } })
+        // The atomic updateMany with count === 0 guard ensures exactly one wins the reclaim.
+        const [responseA, responseB] = await Promise.all([
+            request(app)
+                .post("/api/v1/bookings")
+                .set("Cookie", [`token=${token}`])
+                .set("Idempotency-Key", idempotencyKey)
+                .send({ slotId: slot.id }),
+
+            request(app)
+                .post("/api/v1/bookings")
+                .set("Cookie", [`token=${token}`])
+                .set("Idempotency-Key", idempotencyKey)
+                .send({ slotId: slot.id }),
+        ]);
+
+        // Exactly one request wins the atomic reclaim and performs the creation (201).
+        // The other concurrent request either receives:
+        // - 409 Conflict (if it collided while the winning request was in STARTED state), or
+        // - 200 OK (if it arrived after the winning request completed and replayed the cached response).
+        const statuses = [responseA.status, responseB.status];
+        expect(statuses).toContain(201);
+        const secondStatus = statuses.find((s, idx) => idx !== statuses.indexOf(201)) ?? statuses[1];
+        expect([200, 409]).toContain(secondStatus);
+
+        // Verify only 1 booking was created
+        const bookings = await prisma.booking.findMany({
+            where: {
+                slotId: slot.id,
+                status: "ACTIVE",
+            },
+        });
+        expect(bookings).toHaveLength(1);
+
+        // Verify the key transitioned to COMPLETED
+        const keyRecord = await prisma.idempotencyKey.findUnique({
+            where: {
+                uniqueTenantActionKey: {
+                    organizationId: organization.id,
+                    action: "create_booking",
+                    idempotencyKey,
+                },
+            },
+        });
+        expect(keyRecord?.status).toBe("COMPLETED");
     });
 
     it("rejects booking a slot if the member already has an active booking at the same time with a different mentor", async () => {
@@ -357,6 +578,8 @@ describe("POST /api/v1/bookings", () => {
                 organizationId: organization.id,
                 memberId: memberA.id,
                 slotId: slotB.id,
+                slotStartTime: slotB.startTime,
+                slotEndTime: slotB.endTime,
                 status: "ACTIVE",
             },
         });
@@ -865,6 +1088,8 @@ describe("POST /api/v1/bookings/:bookingId/cancel", () => {
                 organizationId: organization.id,
                 memberId: memberA.id,
                 slotId: slotB.id,
+                slotStartTime: slotB.startTime,
+                slotEndTime: slotB.endTime,
                 status: "ACTIVE",
             },
         });

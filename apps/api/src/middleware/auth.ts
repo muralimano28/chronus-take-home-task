@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { prisma } from "@chronus/db";
 import { setContext } from "@chronus/logger";
+import { logger } from "../logger";
 
 import { env } from "../config/env";
  
@@ -46,14 +47,17 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
       !("userId" in decoded) ||
       !("organizationId" in decoded)
     ) {
-      console.error("[Auth Middleware Error] Token payload is missing required fields.");
+      logger.error("Token payload is missing required fields", {
+        event: "security.access_denied",
+        reason: "invalid_payload_structure",
+      });
       res.status(401).json({ error: "Invalid session structure. Please log in again." });
       return;
     }
 
     const payload = decoded as AuthPayload;
 
-    // Verify requesting user's membership exists in DB
+    // Verify requesting user's membership exists in DB and fetch authoritative state
     const membership = await prisma.organizationUser.findUnique({
       where: {
         organizationId_id: {
@@ -61,30 +65,62 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
           id: payload.membershipId,
         },
       },
-      select: { id: true },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        organization: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
     });
 
     if (!membership) {
+      logger.warn("Access denied: membership invalid or deactivated", {
+        event: "security.access_denied",
+        reason: "membership_not_found",
+        claimedOrganizationId: payload.organizationId,
+        claimedMembershipId: payload.membershipId,
+      });
       res.status(403).json({ error: "Access denied. Your membership is invalid or has been deactivated." });
       return;
     }
 
-    // SECURITY NOTE: We trust only 'membershipId' and 'organizationId' from the JWT payload.
-    // Relying on mutable state inside the JWT (like 'isMentor' or user details) presents a security risk
-    // if privileges are revoked or updated. The database remains the single source of truth.
-    req.user = payload;
+    // Populate req.user strictly from the authoritative database record to eliminate privilege escalation
+    // and stale claim risks (e.g. isMentor, timezone, email changes).
+    req.user = {
+      membershipId: membership.id,
+      userId: membership.userId,
+      organizationId: membership.organizationId,
+      isMentor: membership.isMentor,
+      timezone: membership.timezone,
+      name: membership.user.name,
+      email: membership.user.email,
+      organizationName: membership.organization.name,
+    };
 
     // Immediately populate AsyncLocalStorage context so all downstream logs include user and tenant metadata
     setContext({
-      organizationId: payload.organizationId,
-      userId: payload.userId,
-      membershipId: payload.membershipId,
+      organizationId: membership.organizationId,
+      userId: membership.userId,
+      membershipId: membership.id,
     });
 
     next();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("[Auth Middleware Error] Token verification failed:", message);
+    logger.error("Token verification failed:", {
+      event: "security.access_denied",
+      reason: "jwt_verification_failed",
+      error: message,
+    });
     res.status(401).json({ error: "Invalid or expired session. Please log in again." });
   }
 }

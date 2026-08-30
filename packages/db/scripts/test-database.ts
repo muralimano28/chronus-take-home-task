@@ -96,6 +96,8 @@ async function testDatabase() {
         organizationId: org.id,
         memberId: orgMember.id,
         slotId: slot.id,
+        slotStartTime: slot.startTime,
+        slotEndTime: slot.endTime,
       },
     });
     bookingId = booking.id;

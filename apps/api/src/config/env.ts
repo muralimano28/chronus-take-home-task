@@ -9,6 +9,8 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(1, "JWT_SECRET must not be empty"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL must not be empty"),
   REDIS_URL: z.string().default("redis://localhost:6379"),
+  MENTORS_CACHE_TTL_SECONDS: z.coerce.number().default(24 * 60 * 60), // 24 hours default
+  SLOTS_CACHE_TTL_SECONDS: z.coerce.number().default(15 * 60), // 15 minutes default
 });
 
 const parsedEnv = envSchema.safeParse(process.env);

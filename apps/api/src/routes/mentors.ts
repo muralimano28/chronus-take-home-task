@@ -4,12 +4,54 @@ import { requireAuth, AuthenticatedRequest } from "../middleware/auth";
 import { validateTenantAccess } from "../middleware/tenant";
 import { isValidUuid } from "../utils/validation";
 import { redis } from "@chronus/redis";
-import { logger } from "@chronus/logger";
+import { logger } from "../logger";
+import { env } from "../config/env";
 
 const router = Router({ mergeParams: true });
 
-// 24 hours in seconds
-const CACHE_TTL_SECONDS = 24 * 60 * 60;
+// Mentor list cache TTL in seconds (configurable via env)
+const CACHE_TTL_SECONDS = env.MENTORS_CACHE_TTL_SECONDS;
+
+// Default TTL for version keys (7 days) to ensure keys expire when inactive and never persist forever
+const DEFAULT_VERSION_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * Resiliently fetches or initializes a cache version key in Redis with full-jitter exponential backoff.
+ * Returns null only after maxRetries are exhausted, gracefully falling back to database reads.
+ */
+async function getOrInitVersion(versionKey: string, maxRetries = 2, ttlSeconds = DEFAULT_VERSION_TTL_SECONDS): Promise<string | null> {
+  const BASE_DELAY_MS = 30;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const rawVersion = await redis.get(versionKey);
+      if (rawVersion) {
+        return rawVersion;
+      }
+      
+      // Atomic SET IF NOT EXISTS with TTL to prevent infinite persistence and avoid overwriting concurrent mutations
+      const defaultVersion = "1";
+      const setResult = await redis.set(versionKey, defaultVersion, "EX", ttlSeconds, "NX");
+      if (setResult === "OK") {
+        return defaultVersion;
+      }
+
+      // If setResult is null, a concurrent process set or incremented the key first; re-fetch the latest version
+      const currentVersion = await redis.get(versionKey);
+      return currentVersion || defaultVersion;
+    } catch (err) {
+      if (attempt === maxRetries) {
+        logger.warn(`Failed to retrieve or initialize cache version for ${versionKey} after ${maxRetries} attempts. Gracefully bypassing cache to DB:`, { error: err });
+        return null;
+      }
+      // Full jitter exponential backoff: random between [0, base * 2^(attempt - 1)]
+      const maxBackoff = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      const jitteredDelay = Math.floor(Math.random() * maxBackoff);
+      await new Promise((resolve) => setTimeout(resolve, jitteredDelay));
+    }
+  }
+  return null;
+}
 
 /**
  * GET /mentors
@@ -27,23 +69,9 @@ router.get("/", requireAuth, validateTenantAccess, async (req: AuthenticatedRequ
     const limit = ALLOWED_LIMITS.find((val) => rawLimit <= val) ?? 100;
     const skip = (page - 1) * limit;
 
-    // 2. Fetch version number for the organization from Redis
+    // 2. Fetch version number for the organization from Redis with retry resilience
     const versionKey = `org:${organizationId}:mentors:version`;
-    let version: string | null = null;
-    try {
-      const rawVersion = await redis.get(versionKey);
-      if (rawVersion) {
-        version = rawVersion;
-      } else {
-        version = "1";
-        // Initialize version to 1 if not present (unawaited fire-and-forget)
-        redis.set(versionKey, version).catch((err) => {
-          logger.warn(`Failed to initialize version for org ${organizationId}:`, { error: err });
-        });
-      }
-    } catch (redisError) {
-      logger.warn(`Failed to get version for org ${organizationId}:`, { error: redisError });
-    }
+    const version = await getOrInitVersion(versionKey);
 
     // 3. Check second cache level for paginated mentor list (only if version was successfully retrieved)
     const cacheKey = version ? `org:${organizationId}:mentors:v${version}:page:${page}:limit:${limit}` : null;
@@ -63,7 +91,6 @@ router.get("/", requireAuth, validateTenantAccess, async (req: AuthenticatedRequ
     const whereClause = {
       organizationId,
       isMentor: true,
-      id: { not: membershipId },
     };
 
     // 4. Query total count and paginated mentors in parallel from database
@@ -114,7 +141,7 @@ router.get("/", requireAuth, validateTenantAccess, async (req: AuthenticatedRequ
     // 6. Return response to user immediately
     res.status(200).json(responsePayload);
 
-    // 7. Fire-and-forget: Populate Redis cache with 24 hours TTL in the background (if version was retrieved)
+    // 7. Fire-and-forget: Populate Redis cache with TTL in the background (if version was retrieved)
     if (cacheKey) {
       redis.set(cacheKey, JSON.stringify(responsePayload), "EX", CACHE_TTL_SECONDS).catch((redisError) => {
         logger.warn(`Failed to set cache for key ${cacheKey}:`, { error: redisError });
@@ -126,8 +153,84 @@ router.get("/", requireAuth, validateTenantAccess, async (req: AuthenticatedRequ
   }
 });
 
-// TTL for mentor availability slots (15 minutes in seconds)
-const SLOTS_CACHE_TTL_SECONDS = 15 * 60;
+// TTL for mentor availability slots (configurable via env)
+const SLOTS_CACHE_TTL_SECONDS = env.SLOTS_CACHE_TTL_SECONDS;
+
+/**
+ * GET /mentors/me/slots
+ * Fetches all slots (AVAILABLE and BOOKED) created by the authenticated mentor,
+ * including attendee details for booked sessions.
+ */
+router.get("/me/slots", requireAuth, validateTenantAccess, async (req: AuthenticatedRequest, res) => {
+  const { organizationId, membershipId, isMentor } = req.user!;
+
+  if (!isMentor) {
+    res.status(403).json({ error: "Only mentors can access this endpoint." });
+    return;
+  }
+
+  try {
+    const slots = await prisma.mentorSlot.findMany({
+      where: {
+        organizationId,
+        mentorId: membershipId,
+      },
+      include: {
+        bookings: {
+          where: {
+            status: "ACTIVE",
+          },
+          include: {
+            member: {
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                  },
+                },
+              },
+            },
+          },
+          take: 1,
+        },
+      },
+      orderBy: {
+        startTime: "asc",
+      },
+    });
+
+    const formattedSlots = slots.map((slot) => {
+      const activeBooking = slot.bookings[0];
+      return {
+        id: slot.id,
+        mentorId: slot.mentorId,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        status: slot.status,
+        createdAt: slot.createdAt,
+        booking: activeBooking
+          ? {
+            id: activeBooking.id,
+            status: activeBooking.status,
+            member: {
+              userId: activeBooking.member.user.id,
+              name: activeBooking.member.user.name,
+              email: activeBooking.member.user.email,
+              timezone: activeBooking.member.timezone,
+            },
+          }
+          : null,
+      };
+    });
+
+    res.status(200).json(formattedSlots);
+  } catch (error) {
+    logger.error(`Failed to fetch slots for authenticated mentor ${membershipId}:`, { error });
+    res.status(500).json({ error: "Failed to fetch mentor slots." });
+  }
+});
 
 /**
  * GET /mentors/:mentorId/slots
@@ -224,23 +327,9 @@ router.get("/:mentorId/slots", requireAuth, validateTenantAccess, async (req: Au
       const startDateStr = todayStart.toISOString().split("T")[0];
       const endDateStr = endRange.toISOString().split("T")[0];
 
-      // Check Redis cache for predefined range (only if version is retrieved successfully)
+      // Check Redis cache for predefined range (with retry resilience)
       const slotsVersionKey = `org:${organizationId}:mentor:${mentorId}:slots:version`;
-      let slotsVersion: string | null = null;
-      try {
-        const rawVersion = await redis.get(slotsVersionKey);
-        if (rawVersion) {
-          slotsVersion = rawVersion;
-        } else {
-          slotsVersion = "1";
-          // Initialize version to 1 if not present (unawaited fire-and-forget)
-          redis.set(slotsVersionKey, slotsVersion).catch((err) => {
-            logger.warn(`Failed to initialize slots version for mentor ${mentorId}:`, { error: err });
-          });
-        }
-      } catch (redisError) {
-        logger.warn(`Failed to get slots version for mentor ${mentorId}:`, { error: redisError });
-      }
+      const slotsVersion = await getOrInitVersion(slotsVersionKey);
 
       // 4. Check second cache level for mentor slots (only if version was successfully retrieved)
       slotsCacheKey = slotsVersion ? `org:${organizationId}:mentor:${mentorId}:slots:v${slotsVersion}:start:${startDateStr}:end:${endDateStr}` : null;

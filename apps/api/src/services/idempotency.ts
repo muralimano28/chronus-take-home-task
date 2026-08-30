@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { prisma } from "@chronus/db";
+import { logger } from "../logger";
 
 interface IdempotentOptions<T> {
   organizationId: string;
@@ -16,10 +17,28 @@ export interface IdempotentResult<T> {
 }
 
 /**
+ * Deterministically serializes any JavaScript object or primitive by recursively sorting object keys.
+ * Guarantees that { a: 1, b: 2 } and { b: 2, a: 1 } generate identical canonical strings.
+ */
+export function canonicalStringify(obj: any): string {
+  if (obj === null || typeof obj !== "object") {
+    return JSON.stringify(obj);
+  }
+
+  if (Array.isArray(obj)) {
+    return `[${obj.map(canonicalStringify).join(",")}]`;
+  }
+
+  const sortedKeys = Object.keys(obj).sort();
+  const pairs = sortedKeys.map((key) => `${JSON.stringify(key)}:${canonicalStringify(obj[key])}`);
+  return `{${pairs.join(",")}}`;
+}
+
+/**
  * Executes a business handler idempotently using the IdempotencyKey model.
  * 
  * Flow:
- * 1. Computes the SHA-256 hash of the request payload.
+ * 1. Computes the SHA-256 hash of the canonical request payload.
  * 2. Attempts to insert a STARTED record.
  *    - If successful, executes the handler inside a transaction (or passes the tx context).
  *    - If unique constraint violation (key already exists):
@@ -33,10 +52,10 @@ export async function runIdempotent<T>(
   const { organizationId, action, idempotencyKey, payload, handler } = options;
   let currentLockTimestamp: Date | null = null;
 
-  // 1. Compute request hash
+  // 1. Compute canonical deterministic request hash
   const requestHash = crypto
     .createHash("sha256")
-    .update(JSON.stringify(payload || {}))
+    .update(canonicalStringify(payload || {}))
     .digest("hex");
 
   let recordId: string | null = null;
@@ -166,7 +185,7 @@ export async function runIdempotent<T>(
           data: { status: "FAILED" },
         });
       } catch (dbError) {
-        console.error("[Idempotency Service Error] Failed to update key status to FAILED:", dbError);
+        logger.error("Failed to update idempotency key status to FAILED:", { error: dbError });
       }
     }
     throw handlerError;

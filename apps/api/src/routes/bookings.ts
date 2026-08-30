@@ -1,27 +1,41 @@
 import { Response, Router } from "express";
+import { randomUUID } from "node:crypto";
 import { prisma } from "@chronus/db";
 import { redis } from "@chronus/redis";
 import { requireAuth, AuthenticatedRequest } from "../middleware/auth";
 import { isValidUuid } from "../utils/validation";
 import { runIdempotent } from "../services/idempotency";
 import { getContext } from "@chronus/logger";
+import { logger } from "../logger";
 
 const router = Router();
 
+// Default TTL for version keys (7 days) so inactive mentor slot versions expire cleanly
+const VERSION_KEY_TTL_SECONDS = 7 * 24 * 60 * 60;
+
 /**
- * Increments the mentor's availability slots cache version in Redis with retry logic.
+ * Increments the mentor's availability slots cache version in Redis with full-jitter exponential backoff
+ * and refreshes its TTL so it never persists indefinitely in Redis.
  */
 async function bumpMentorSlotsVersion(organizationId: string, mentorId: string, maxRetries = 3) {
+  const BASE_DELAY_MS = 50;
+  const key = `org:${organizationId}:mentor:${mentorId}:slots:version`;
+
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      await redis.incr(`org:${organizationId}:mentor:${mentorId}:slots:version`);
+      const pipeline = redis.pipeline();
+      pipeline.incr(key);
+      pipeline.expire(key, VERSION_KEY_TTL_SECONDS);
+      await pipeline.exec();
       return;
     } catch (err) {
       if (attempt === maxRetries) {
-        console.warn(`[Redis Invalidation Error] Failed to bump slots version for mentor ${mentorId} after ${maxRetries} attempts:`, err);
+        logger.error(`[Redis Invalidation Error] Failed to bump slots version for mentor ${mentorId} after ${maxRetries} attempts:`, { error: err });
       } else {
-        // Exponential backoff: 50ms, 100ms, etc.
-        await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+        // Full jitter exponential backoff: random between [0, base * 2^(attempt - 1)] to avoid synchronized retry storms
+        const maxBackoff = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        const jitteredDelay = Math.floor(Math.random() * maxBackoff);
+        await new Promise((resolve) => setTimeout(resolve, jitteredDelay));
       }
     }
   }
@@ -84,7 +98,7 @@ router.get("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =>
 
     res.status(200).json(formattedBookings);
   } catch (error) {
-    console.error(`[Bookings Route Error] Failed to fetch bookings for member ${membershipId} in org ${organizationId}:`, error);
+    logger.error(`Failed to fetch bookings for member ${membershipId} in org ${organizationId}:`, { error });
     res.status(500).json({ error: "Internal server error." });
   }
 });
@@ -117,13 +131,11 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
       payload: { slotId },
       handler: async (tx) => {
 
-        // For a mentorship/booking platform at normal-to-high scale:
-        // Accidental duplicate clicks by the user are already prevented by disabling the button in the UI and using Idempotency-Key.
-        // Pessimistic DB row locking (SELECT FOR UPDATE) on the user table is usually overkill for user overlap checks and can indeed become a connection pool bottleneck.
-
-        // Concurrency lock: Acquire pessimistic lock on the booking member's OrganizationUser row
-        // to prevent concurrent overlap check bypass.
-        // await tx.$executeRaw`SELECT 1 FROM "OrganizationUser" WHERE id = ${membershipId}::uuid FOR UPDATE`;
+        // Double-booking & Concurrency Control:
+        // 1. Mentee overlap prevention: Enforced via PostgreSQL GiST exclusion constraint (`no_overlapping_active_member_bookings`).
+        //    This completely eliminates race conditions at the database level without requiring connection-bottlenecking pessimistic table/row locks (`SELECT FOR UPDATE`).
+        // 2. Slot concurrency: Optimistically guarded via `tx.mentorSlot.update({ where: { status: "AVAILABLE" } })`.
+        // 3. UI/Network retries: Handled by Idempotency-Key and disabling submit buttons on click.
 
         // 1. Fetch the slot to verify existence and business rules
         const slot = await tx.mentorSlot.findUnique({
@@ -192,12 +204,14 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
           },
         });
 
-        // 3. Create booking record
+        // 3. Create booking record with slotStartTime and slotEndTime for DB-enforced exclusion constraint
         const booking = await tx.booking.create({
           data: {
             organizationId,
             memberId: membershipId,
             slotId,
+            slotStartTime: slot.startTime,
+            slotEndTime: slot.endTime,
             status: "ACTIVE",
           },
           include: {
@@ -230,7 +244,7 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
 
         // 4. Record transactional outbox event for reliable notification dispatch
         const bookingBody = formatBookingResponse(booking);
-        const correlationId = getContext()!.correlationId!;
+        const correlationId = getContext()?.correlationId || randomUUID();
 
         await tx.outboxEvent.create({
           data: {
@@ -250,13 +264,23 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
     });
 
     if (result.replayed) {
+      logger.info(`Booking request replayed via idempotency key: ${result.body?.id}`, {
+        event: "booking.idempotent_retry",
+        bookingId: result.body?.id,
+        idempotencyKey,
+      });
       res.setHeader("x-idempotent-replayed", "true");
       res.status(200).json(result.body);
     } else {
+      logger.info(`Booking created successfully: ${result.body?.id}`, {
+        event: "booking.created",
+        bookingId: result.body?.id,
+        slotId: result.body?.slot?.id,
+      });
       // Invalidate cached mentor availability slots by incrementing the version (with retries)
       const mentorId = result.body?.slot?.mentor?.membershipId;
       if (mentorId) {
-        bumpMentorSlotsVersion(organizationId, mentorId);
+        await bumpMentorSlotsVersion(organizationId, mentorId);
       }
       res.status(result.statusCode).json(result.body);
     }
@@ -268,14 +292,51 @@ router.post("/", requireAuth, async (req: AuthenticatedRequest, res: Response) =
         return;
       }
 
+      // Check for PostgreSQL exclusion constraint violation (error code 23P01) or custom constraint name
+      const isExclusionViolation =
+        error.code === "23P01" ||
+        (error.meta?.message && error.meta.message.includes("no_overlapping_active_member_bookings")) ||
+        (error.message && error.message.includes("no_overlapping_active_member_bookings"));
+
+      if (isExclusionViolation) {
+        logger.warn("Booking rejected: overlapping active member booking", {
+          event: "booking.conflict",
+          conflictType: "overlapping_member_booking",
+          slotId,
+        });
+        res.status(409).json({ error: "You already have an active booking overlapping with this time slot." });
+        return;
+      }
+
       // Prisma optimistic locking error: P2025 (record to update not found because status !== AVAILABLE)
-      if (error.code === "P2025" || error.code === "P2002") {
+      if (error.code === "P2025") {
+        logger.warn("Booking rejected: slot already booked or unavailable", {
+          event: "booking.conflict",
+          conflictType: "slot_already_booked",
+          slotId,
+        });
         res.status(409).json({ error: "Slot is no longer available or has already been booked." });
+        return;
+      }
+
+      // Distinct unique constraint violation (P2002)
+      if (error.code === "P2002") {
+        const target = Array.isArray(error.meta?.target)
+          ? error.meta.target.join(", ")
+          : (error.meta?.target || "field");
+
+        logger.warn(`Booking rejected: unique constraint violation on ${target}`, {
+          event: "booking.conflict",
+          conflictType: "unique_constraint_violation",
+          target,
+          slotId,
+        });
+        res.status(400).json({ error: `A record with this ${target} already exists.` });
         return;
       }
     }
 
-    console.error(`[Bookings Route Error] Failed to create booking for member ${membershipId} in org ${organizationId}:`, error);
+    logger.error(`Failed to create booking for member ${membershipId} in org ${organizationId}:`, { error });
     res.status(500).json({ error: "Internal server error." });
   }
 });
@@ -306,7 +367,10 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
         // 1. Fetch booking to check ownership, organization, status, and fetch slotId
         const booking = await tx.booking.findUnique({
           where: {
-            id: bookingId,
+            organizationId_id: {
+              organizationId,
+              id: bookingId,
+            },
           },
           include: {
             member: {
@@ -338,7 +402,7 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
 
         // Enforce tenant isolation and ownership check:
         // User must belong to the same organization and must be the member who booked it.
-        if (!booking || booking.organizationId !== organizationId || booking.memberId !== membershipId) {
+        if (!booking || booking.memberId !== membershipId) {
           const err: any = new Error("Booking not found.");
           err.statusCode = 404;
           throw err;
@@ -375,7 +439,10 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
         // Mark the booking as cancelled
         const cancelledBooking = await tx.booking.update({
           where: {
-            id: bookingId,
+            organizationId_id: {
+              organizationId,
+              id: bookingId,
+            },
           },
           data: {
             status: "CANCELLED",
@@ -411,7 +478,7 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
 
         // 3. Record transactional outbox event for reliable cancellation notification dispatch
         const cancelledBookingBody = formatBookingResponse(cancelledBooking);
-        const correlationId = getContext()!.correlationId!;
+        const correlationId = getContext()?.correlationId || randomUUID();
 
         await tx.outboxEvent.create({
           data: {
@@ -431,13 +498,23 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
     });
 
     if (result.replayed) {
+      logger.info(`Booking cancellation replayed via idempotency key: ${bookingId}`, {
+        event: "booking.idempotent_retry",
+        bookingId,
+        idempotencyKey,
+      });
       res.setHeader("x-idempotent-replayed", "true");
       res.status(200).json(result.body);
     } else {
+      logger.info(`Booking cancelled successfully: ${bookingId}`, {
+        event: "booking.cancelled",
+        bookingId,
+        slotId: result.body?.slot?.id,
+      });
       // Invalidate cached mentor availability slots by incrementing the version (with retries)
       const mentorId = result.body?.slot?.mentor?.membershipId;
       if (mentorId) {
-        bumpMentorSlotsVersion(organizationId, mentorId);
+        await bumpMentorSlotsVersion(organizationId, mentorId);
       }
       res.status(result.statusCode).json(result.body);
     }
@@ -447,7 +524,7 @@ router.post("/:bookingId/cancel", requireAuth, async (req: AuthenticatedRequest,
       return;
     }
 
-    console.error(`[Bookings Route Error] Failed to cancel booking ${bookingId} for member ${membershipId} in org ${organizationId}:`, error);
+    logger.error(`Failed to cancel booking ${bookingId} for member ${membershipId} in org ${organizationId}:`, { error });
     res.status(500).json({ error: "Internal server error." });
   }
 });
@@ -482,17 +559,20 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
       payload: { bookingId, newSlotId },
       handler: async (tx) => {
 
-        // For a mentorship/booking platform at normal-to-high scale:
-        // Accidental duplicate clicks by the user are already prevented by disabling the button in the UI and using Idempotency-Key.
-        // Pessimistic DB row locking (SELECT FOR UPDATE) on the user table is usually overkill for user overlap checks and can indeed become a connection pool bottleneck.
-
-        // Concurrency lock: Acquire pessimistic lock on the booking member's OrganizationUser row
-        // to prevent concurrent overlap check bypass.
-        // await tx.$executeRaw`SELECT 1 FROM "OrganizationUser" WHERE id = ${membershipId}::uuid FOR UPDATE`;
+        // Double-booking & Concurrency Control:
+        // 1. Mentee overlap prevention: Enforced via PostgreSQL GiST exclusion constraint (`no_overlapping_active_member_bookings`).
+        //    This completely eliminates race conditions at the database level without requiring connection-bottlenecking pessimistic table/row locks (`SELECT FOR UPDATE`).
+        // 2. Slot concurrency: Optimistically guarded via `tx.mentorSlot.update({ where: { status: "AVAILABLE" } })`.
+        // 3. UI/Network retries: Handled by Idempotency-Key and disabling submit buttons on click.
 
         // 1. Fetch current booking
         const booking = await tx.booking.findUnique({
-          where: { id: bookingId },
+          where: {
+            organizationId_id: {
+              organizationId,
+              id: bookingId,
+            },
+          },
           include: {
             slot: {
               include: {
@@ -507,7 +587,7 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
         });
 
         // Enforce tenant isolation and ownership check:
-        if (!booking || booking.organizationId !== organizationId || booking.memberId !== membershipId) {
+        if (!booking || booking.memberId !== membershipId) {
           const err: any = new Error("Booking not found.");
           err.statusCode = 404;
           throw err;
@@ -522,7 +602,12 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
         // If new slot is the same as old slot, it's a no-op
         if (booking.slotId === newSlotId) {
           const fullBooking = await tx.booking.findUnique({
-            where: { id: bookingId },
+            where: {
+              organizationId_id: {
+                organizationId,
+                id: bookingId,
+              },
+            },
             include: {
               member: {
                 include: {
@@ -602,7 +687,19 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
           throw err;
         }
 
-        // Free up old slot
+        // 1. Reserve new slot first (optimistic locking checks status: AVAILABLE)
+        await tx.mentorSlot.update({
+          where: {
+            id: newSlotId,
+            organizationId,
+            status: "AVAILABLE",
+          },
+          data: {
+            status: "BOOKED",
+          },
+        });
+
+        // 2. Free up old slot
         await tx.mentorSlot.update({
           where: {
             organizationId_id: {
@@ -615,22 +712,19 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
           },
         });
 
-        // Reserve new slot (optimistic locking checks status: AVAILABLE)
-        await tx.mentorSlot.update({
+        // Update slot ID and time range on the existing booking
+        const bookingRecord = await tx.booking.update({
           where: {
-            id: newSlotId,
-            organizationId,
-            status: "AVAILABLE",
+            organizationId_id: {
+              organizationId,
+              id: bookingId,
+            },
           },
           data: {
-            status: "BOOKED",
+            slotId: newSlotId,
+            slotStartTime: newSlot.startTime,
+            slotEndTime: newSlot.endTime,
           },
-        });
-
-        // Update slot ID on the existing booking
-        const bookingRecord = await tx.booking.update({
-          where: { id: bookingId },
-          data: { slotId: newSlotId },
           include: {
             member: {
               include: {
@@ -654,7 +748,7 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
 
         // 4. Record transactional outbox event for reliable reschedule notification dispatch
         const rescheduledBookingBody = formatBookingResponse(bookingRecord);
-        const correlationId = getContext()!.correlationId!;
+        const correlationId = getContext()?.correlationId || randomUUID();
 
         await tx.outboxEvent.create({
           data: {
@@ -688,9 +782,19 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
     });
 
     if (result.replayed) {
+      logger.info(`Booking reschedule replayed via idempotency key: ${bookingId}`, {
+        event: "booking.idempotent_retry",
+        bookingId,
+        idempotencyKey,
+      });
       res.setHeader("x-idempotent-replayed", "true");
       res.status(200).json(result.body);
     } else {
+      logger.info(`Booking rescheduled successfully: ${bookingId}`, {
+        event: "booking.rescheduled",
+        bookingId,
+        newSlotId,
+      });
       // Invalidate cached availability slots for both old and new mentors (deduplicating if the same mentor)
       const newMentorId = result.body?.slot?.mentor?.membershipId;
 
@@ -698,9 +802,8 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
       if (oldMentorId) mentorIdsToInvalidate.add(oldMentorId);
       if (newMentorId) mentorIdsToInvalidate.add(newMentorId);
 
-      // (unawaited fire-and-forget)
       for (const mId of mentorIdsToInvalidate) {
-        bumpMentorSlotsVersion(organizationId, mId);
+        await bumpMentorSlotsVersion(organizationId, mId);
       }
 
       res.status(result.statusCode).json(result.body);
@@ -711,13 +814,54 @@ router.post("/:bookingId/reschedule", requireAuth, async (req: AuthenticatedRequ
         res.status(error.statusCode).json({ error: error.message });
         return;
       }
+
+      // Check for PostgreSQL exclusion constraint violation (error code 23P01) or custom constraint name
+      const isExclusionViolation =
+        error.code === "23P01" ||
+        (error.meta?.message && error.meta.message.includes("no_overlapping_active_member_bookings")) ||
+        (error.message && error.message.includes("no_overlapping_active_member_bookings"));
+
+      if (isExclusionViolation) {
+        logger.warn("Booking reschedule rejected: overlapping active member booking", {
+          event: "booking.conflict",
+          conflictType: "overlapping_member_booking",
+          bookingId,
+          newSlotId,
+        });
+        res.status(409).json({ error: "You already have an active booking overlapping with this time slot." });
+        return;
+      }
+
       // Record not found during optimistic lock constraint check
-      if (error.code === "P2025" || error.code === "P2002") {
+      if (error.code === "P2025") {
+        logger.warn("Booking reschedule rejected: slot already booked or unavailable", {
+          event: "booking.conflict",
+          conflictType: "slot_already_booked",
+          bookingId,
+          newSlotId,
+        });
         res.status(409).json({ error: "New slot is no longer available." });
         return;
       }
+
+      // Distinct unique constraint violation (P2002)
+      if (error.code === "P2002") {
+        const target = Array.isArray(error.meta?.target)
+          ? error.meta.target.join(", ")
+          : (error.meta?.target || "field");
+
+        logger.warn(`Booking reschedule rejected: unique constraint violation on ${target}`, {
+          event: "booking.conflict",
+          conflictType: "unique_constraint_violation",
+          target,
+          bookingId,
+          newSlotId,
+        });
+        res.status(400).json({ error: `A record with this ${target} already exists.` });
+        return;
+      }
     }
-    console.error(`[Bookings Route Error] Failed to reschedule booking ${bookingId} to slot ${newSlotId} for member ${membershipId} in org ${organizationId}:`, error);
+    logger.error(`Failed to reschedule booking ${bookingId} to slot ${newSlotId} for member ${membershipId} in org ${organizationId}:`, { error });
     res.status(500).json({ error: "Internal server error." });
   }
 });

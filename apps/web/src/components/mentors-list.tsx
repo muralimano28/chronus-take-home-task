@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { Avatar, AvatarImage, AvatarFallback, Button } from "@chronus/ui";
 import { Users, Loader2, AlertCircle, Globe, ChevronLeft, ChevronRight } from "lucide-react";
 import { BookSessionSheet } from "./book-session-sheet";
@@ -27,6 +28,7 @@ interface PaginatedMentorsResponse {
 }
 
 export function MentorsList() {
+  const { user } = useAuth();
   const [mentors, setMentors] = useState<Mentor[]>([]);
   const [pagination, setPagination] = useState<PaginationMeta>({
     total: 0,
@@ -116,7 +118,13 @@ export function MentorsList() {
                     <Globe className="h-3 w-3" />
                     {mentor.timezone}
                   </span>
-                  <BookSessionSheet mentor={mentor} />
+                  {user && user.userId === mentor.userId ? (
+                    <span className="rounded-md bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+                      You (Mentor)
+                    </span>
+                  ) : (
+                    <BookSessionSheet mentor={mentor} />
+                  )}
                 </div>
               </div>
             ))}

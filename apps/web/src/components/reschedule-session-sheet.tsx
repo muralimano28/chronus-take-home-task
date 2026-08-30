@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import {
   Button, Avatar, AvatarImage, AvatarFallback,
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter, SheetClose, toast,
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue
 } from "@chronus/ui";
-import { Loader2, AlertCircle, Calendar, Globe } from "lucide-react";
+import { Loader2, AlertCircle, Calendar } from "lucide-react";
 import { Mentor } from "./mentors-list";
 import { Slot } from "./book-session-sheet";
 import { formatDateInTimezone, formatTimeInTimezone } from "@chronus/utils";
@@ -23,6 +24,7 @@ export function RescheduleSessionSheet({
   onOpenChange: (open: boolean) => void,
   onSuccess?: () => void
 }) {
+  const { user } = useAuth();
   const [mentors, setMentors] = useState<Mentor[]>([]);
   const [mentorsLoading, setMentorsLoading] = useState(false);
 
@@ -43,7 +45,12 @@ export function RescheduleSessionSheet({
       setMentorsLoading(true);
       // TODO: We will allow searching for mentors in future iterations
       api.get<{ data: Mentor[] }>("/mentors?limit=100")
-        .then(res => setMentors(res.data.data))
+        .then(res => {
+          const availableMentors = user
+            ? res.data.data.filter(m => m.userId !== user.userId && m.membershipId !== user.membershipId)
+            : res.data.data;
+          setMentors(availableMentors);
+        })
         .catch(err => {
           console.error("Failed to fetch mentors:", err);
           setError(err.message || "Failed to load mentors.");
@@ -105,8 +112,6 @@ export function RescheduleSessionSheet({
         setIsRescheduling(false);
       });
   };
-
-  const selectedMentor = mentors.find(m => m.membershipId === selectedMentorId);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -188,25 +193,27 @@ export function RescheduleSessionSheet({
                         <div className="flex items-start justify-between">
                           <div className="flex flex-col gap-0.5">
                             <span className={`font-semibold text-sm ${isSelected ? "text-primary" : "text-foreground"}`}>
-                              {formatTimeInTimezone(start, userTimezone)} - {formatTimeInTimezone(end, userTimezone)}
+                              {formatTimeInTimezone(start, userTimezone)} - {formatTimeInTimezone(end, userTimezone)} ({userTimezone})
                             </span>
                             <span className="text-xs text-muted-foreground font-medium flex items-center gap-1">
                               <Calendar className="h-3 w-3" />
-                              {formatDateInTimezone(start, userTimezone)} (Your time)
+                              {formatDateInTimezone(start, userTimezone)}
                             </span>
                           </div>
                         </div>
-                        <div className={`flex items-start justify-between pt-2.5 border-t ${isSelected ? "border-primary/15" : "border-border/60"}`}>
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-xs font-medium text-foreground/80">
-                              {selectedMentor && formatTimeInTimezone(start, selectedMentor.timezone)} - {selectedMentor && formatTimeInTimezone(end, selectedMentor.timezone)}
-                            </span>
-                            <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-                              <Globe className="h-2.5 w-2.5" />
-                              {selectedMentor && formatDateInTimezone(start, selectedMentor.timezone)} ({selectedMentor?.timezone})
-                            </span>
+                        {user?.timezone && (
+                          <div className={`flex items-start justify-between pt-2.5 border-t ${isSelected ? "border-primary/15" : "border-border/60"}`}>
+                            <div className="flex flex-col gap-0.5">
+                              <span className="text-xs font-medium text-foreground/80">
+                                {formatTimeInTimezone(start, user.timezone)} - {formatTimeInTimezone(end, user.timezone)} ({user.timezone})
+                              </span>
+                              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                <Calendar className="h-3 w-3" />
+                                {formatDateInTimezone(start, user.timezone)}
+                              </span>
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </div>
                     </div>
                   );

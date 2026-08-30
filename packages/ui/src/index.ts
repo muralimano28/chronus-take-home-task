@@ -8,4 +8,8 @@ export * from "./components/sheet";
 export * from "./components/sonner";
 export * from "./components/select";
 export * from "./components/alert-dialog";
+export * from "./components/tooltip";
+export * from "./components/separator";
+export * from "./components/sidebar";
+export * from "./lib/use-mobile";
 export { toast } from "sonner";

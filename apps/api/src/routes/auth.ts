@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { prisma } from "@chronus/db";
 
 import { isValidUuid } from "../utils/validation";
+import { logger } from "../logger";
 
 import { env } from "../config/env";
  
@@ -92,7 +93,7 @@ router.post("/login", async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("[Auth Error] Login failure:", error);
+    logger.error("Login failure:", { error });
     res.status(500).json({ error: "Internal server error." });
   }
 });

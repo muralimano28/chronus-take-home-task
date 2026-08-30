@@ -89,6 +89,8 @@ model Booking {
   organizationId String        @db.Uuid
   memberId       String        @db.Uuid
   slotId         String        @db.Uuid
+  slotStartTime  DateTime      @db.Timestamptz(3)
+  slotEndTime    DateTime      @db.Timestamptz(3)
   status         BookingStatus @default(ACTIVE)
 
   createdAt   DateTime  @default(now())
@@ -99,7 +101,9 @@ model Booking {
   member       OrganizationUser @relation(fields: [organizationId, memberId], references: [organizationId, id], onDelete: NoAction)
   slot         MentorSlot       @relation("BookingSlot", fields: [organizationId, slotId], references: [organizationId, id], onDelete: NoAction)
 
+  @@unique([organizationId, id])
   @@unique([slotId], where: { status: "ACTIVE" }) // This restricts only 1 active booking for a slot
+  @@index([memberId, status])
 }
 
 enum IdempotencyStatus {
@@ -118,8 +122,8 @@ model IdempotencyKey {
   responseCode   Int?              @db.SmallInt
   responseBody   Json?
 
-  lockedAt  DateTime @default(now()) @db.Timestamptz
-  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz
+  lockedAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -130,7 +134,9 @@ model IdempotencyKey {
 
 enum OutboxStatus {
   PENDING
+  PROCESSING
   PUBLISHED
+  FAILED
 }
 
 model OutboxEvent {
@@ -140,8 +146,11 @@ model OutboxEvent {
   aggregateId   String
   payload       Json
   status        OutboxStatus @default(PENDING)
-  createdAt     DateTime     @default(now())
-  publishedAt   DateTime?
+  retryCount    Int          @default(0)
+  lockedAt      DateTime?    @db.Timestamptz(3)
+  publishedAt   DateTime?    @db.Timestamptz(3)
+  createdAt     DateTime     @default(now()) @db.Timestamptz(3)
 
   @@index([status, createdAt])
+  @@index([status, lockedAt])
 }

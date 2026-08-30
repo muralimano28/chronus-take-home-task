@@ -1,5 +1,5 @@
 import * as amqp from "amqplib";
-import type { Channel, ChannelModel, ConsumeMessage, Options } from "amqplib";
+import type { ConfirmChannel, ChannelModel, ConsumeMessage, Options } from "amqplib";
 import { config } from "dotenv";
 import { resolve } from "path";
 import { createLogger } from "@chronus/logger";
@@ -45,26 +45,34 @@ export interface ConsumeOptions extends Omit<Options.Consume, "noAck"> {
   noAck?: boolean;
 }
 
+interface RegisteredConsumer {
+  queueName: string;
+  onMessage: (data: any, rawMessage: ConsumeMessage) => Promise<void>;
+  options?: ConsumeOptions;
+}
+
 export class RabbitMQClient {
   private url: string;
   private connection: ChannelModel | null = null;
-  private channel: Channel | null = null;
+  private channel: ConfirmChannel | null = null;
   private isConnecting: boolean = false;
   private reconnectAttempts: number = 0;
   private reconnectIntervalMs: number;
   private maxReconnectAttempts: number;
   private isClosedManually: boolean = false;
+  private registeredConsumers: Map<string, RegisteredConsumer> = new Map();
+  private registeredTopologies: Map<string, QueueTopologyOptions> = new Map();
 
   constructor(config?: RabbitMQConfig) {
     this.url = config?.url || process.env.RABBITMQ_URL || "amqp://guest:guest@localhost:5672";
-    this.reconnectIntervalMs = config?.reconnectIntervalMs || 3000;
-    this.maxReconnectAttempts = config?.maxReconnectAttempts || Infinity;
+    this.reconnectIntervalMs = config?.reconnectIntervalMs || 1000;
+    this.maxReconnectAttempts = config?.maxReconnectAttempts ?? 10;
   }
 
   /**
    * Initializes connection and channel with auto-reconnection listeners.
    */
-  async connect(): Promise<Channel> {
+  async connect(): Promise<ConfirmChannel> {
     if (this.channel) {
       return this.channel;
     }
@@ -103,7 +111,7 @@ export class RabbitMQClient {
         }
       });
 
-      this.channel = await this.connection.createChannel();
+      this.channel = await this.connection.createConfirmChannel();
       this.channel.on("error", (err) => {
         logger.error(`Channel error: ${err.message}`, { error: err });
       });
@@ -113,6 +121,17 @@ export class RabbitMQClient {
       });
 
       this.isConnecting = false;
+
+      // Re-assert previously registered topologies
+      for (const topology of this.registeredTopologies.values()) {
+        await this.setupTopologyOnChannel(this.channel, topology);
+      }
+
+      // Re-register all consumers onto the new channel
+      for (const consumer of this.registeredConsumers.values()) {
+        await this.setupConsumerOnChannel(this.channel, consumer);
+      }
+
       return this.channel;
     } catch (err: any) {
       this.isConnecting = false;
@@ -123,7 +142,7 @@ export class RabbitMQClient {
   }
 
   /**
-   * Exponential backoff auto-reconnect strategy.
+   * Full jitter exponential backoff auto-reconnect strategy.
    */
   private handleReconnect(): void {
     if (this.isClosedManually) return;
@@ -131,18 +150,20 @@ export class RabbitMQClient {
     this.channel = null;
 
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      logger.error(`Max reconnect attempts (${this.maxReconnectAttempts}) reached.`);
+      logger.error(`Max RabbitMQ reconnect attempts (${this.maxReconnectAttempts}) reached. Stopping reconnect loop.`);
       return;
     }
 
     this.reconnectAttempts++;
-    const delay = Math.min(this.reconnectIntervalMs * Math.pow(1.5, this.reconnectAttempts - 1), 30000);
+    // Full jitter exponential backoff: random between [0, min(30000, base * 2^(attempt - 1))]
+    const maxBackoff = Math.min(30000, this.reconnectIntervalMs * Math.pow(2, this.reconnectAttempts - 1));
+    const delay = Math.floor(Math.random() * maxBackoff);
 
-    logger.info(`Retrying connection in ${Math.round(delay)}ms (Attempt #${this.reconnectAttempts})...`);
+    logger.info(`Retrying RabbitMQ connection in ${delay}ms (Attempt #${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
     setTimeout(async () => {
       try {
         await this.connect();
-        logger.info("Successfully reconnected to broker.");
+        logger.info("Successfully reconnected to broker and re-registered consumers.");
       } catch {
         // Next attempt triggered by handleReconnect in catch
       }
@@ -150,10 +171,9 @@ export class RabbitMQClient {
   }
 
   /**
-   * Sets up a resilient queue topology with Dead Letter Exchange (DLX) & Dead Letter Queue (DLQ).
+   * Internal helper to assert topology on a specific channel.
    */
-  async assertTopology(options: QueueTopologyOptions): Promise<{ queue: string; dlq: string }> {
-    const ch = await this.getChannel();
+  private async setupTopologyOnChannel(ch: ConfirmChannel, options: QueueTopologyOptions): Promise<{ queue: string; dlq: string }> {
     const {
       queueName,
       exchangeName,
@@ -194,7 +214,17 @@ export class RabbitMQClient {
   }
 
   /**
-   * Publishes a message to a queue or exchange with persistent delivery.
+   * Sets up a resilient queue topology with Dead Letter Exchange (DLX) & Dead Letter Queue (DLQ).
+   */
+  async assertTopology(options: QueueTopologyOptions): Promise<{ queue: string; dlq: string }> {
+    this.registeredTopologies.set(options.queueName, options);
+    const ch = await this.getChannel();
+    return this.setupTopologyOnChannel(ch, options);
+  }
+
+  /**
+   * Publishes a message to a queue or exchange with publisher confirms and persistent delivery.
+   * Resolves only after RabbitMQ broker acknowledges message persistence (ACK), rejects if NACKed.
    */
   async publish(
     exchangeOrQueue: { exchange?: string; routingKey: string } | string,
@@ -211,29 +241,37 @@ export class RabbitMQClient {
       ...options,
     };
 
-    if (typeof exchangeOrQueue === "string") {
-      // Direct send to queue
-      return ch.sendToQueue(exchangeOrQueue, payloadBuffer, publishOptions);
-    } else {
-      // Publish to exchange with routing key
-      return ch.publish(
-        exchangeOrQueue.exchange || "",
-        exchangeOrQueue.routingKey,
-        payloadBuffer,
-        publishOptions
-      );
-    }
+    return new Promise<boolean>((resolve, reject) => {
+      const confirmCallback = (err: any) => {
+        if (err) {
+          logger.error("RabbitMQ publisher confirmation failed (NACK or error):", { error: err });
+          reject(err);
+        } else {
+          resolve(true);
+        }
+      };
+
+      if (typeof exchangeOrQueue === "string") {
+        // Direct send to queue with publisher confirm callback
+        ch.sendToQueue(exchangeOrQueue, payloadBuffer, publishOptions, confirmCallback);
+      } else {
+        // Publish to exchange with routing key and publisher confirm callback
+        ch.publish(
+          exchangeOrQueue.exchange || "",
+          exchangeOrQueue.routingKey,
+          payloadBuffer,
+          publishOptions,
+          confirmCallback
+        );
+      }
+    });
   }
 
   /**
-   * Consumes messages with error handling, automatic acknowledgements, and DLQ dead-lettering.
+   * Internal helper to register a consumer on a specific channel.
    */
-  async consume<T = any>(
-    queueName: string,
-    onMessage: (data: T, rawMessage: ConsumeMessage) => Promise<void>,
-    options?: ConsumeOptions
-  ): Promise<void> {
-    const ch = await this.getChannel();
+  private async setupConsumerOnChannel(ch: ConfirmChannel, consumer: RegisteredConsumer): Promise<void> {
+    const { queueName, onMessage, options } = consumer;
     const isAutoAck = options?.autoAck === true || options?.noAck === true;
 
     if (options?.prefetch) {
@@ -246,9 +284,8 @@ export class RabbitMQClient {
         if (!msg) return;
 
         try {
-          const content: T = JSON.parse(msg.content.toString("utf-8"));
+          const content = JSON.parse(msg.content.toString("utf-8"));
           await onMessage(content, msg);
-
 
           if (!isAutoAck) {
             ch.ack(msg);
@@ -263,15 +300,31 @@ export class RabbitMQClient {
       },
       {
         ...options,
-        noAck: isAutoAck
+        noAck: isAutoAck,
       }
     );
   }
 
   /**
+   * Consumes messages with error handling, automatic acknowledgements, and DLQ dead-lettering.
+   * Consumer registrations are retained and automatically re-attached upon reconnects.
+   */
+  async consume<T = any>(
+    queueName: string,
+    onMessage: (data: T, rawMessage: ConsumeMessage) => Promise<void>,
+    options?: ConsumeOptions
+  ): Promise<void> {
+    const consumer: RegisteredConsumer = { queueName, onMessage, options };
+    this.registeredConsumers.set(queueName, consumer);
+
+    const ch = await this.getChannel();
+    await this.setupConsumerOnChannel(ch, consumer);
+  }
+
+  /**
    * Returns active channel, auto-connecting if necessary.
    */
-  async getChannel(): Promise<Channel> {
+  async getChannel(): Promise<ConfirmChannel> {
     if (!this.channel || !this.connection) {
       return this.connect();
     }

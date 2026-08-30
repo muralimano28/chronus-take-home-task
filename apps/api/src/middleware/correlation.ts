@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
-import { runWithContext, logger, CORRELATION_ID_HEADER } from "@chronus/logger";
+import { runWithContext, CORRELATION_ID_HEADER } from "@chronus/logger";
+import { logger } from "../logger";
 
 export { CORRELATION_ID_HEADER };
 
@@ -30,7 +31,9 @@ export function correlationMiddleware(req: Request, res: Response, next: NextFun
 
     // Log request start for non-health endpoints to avoid log flooding
     if (!skipLogging) {
-      logger.info(`Incoming ${req.method} ${requestUrl}`);
+      logger.info(`Incoming ${req.method} ${requestUrl}`, {
+        event: "request.started",
+      });
     }
 
     res.on("finish", () => {
@@ -38,8 +41,12 @@ export function correlationMiddleware(req: Request, res: Response, next: NextFun
       const durationMs = Number(endTime - startTime) / 1_000_000; // nanosecond to millisecond conversion
 
       if (!skipLogging) {
+        const isFailed = res.statusCode >= 400;
         const logLevel = res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warn" : "info";
+        const eventName = isFailed ? "request.failed" : "request.completed";
+
         logger.log(logLevel, `Completed ${req.method} ${requestUrl} ${res.statusCode} in ${durationMs.toFixed(2)}ms`, {
+          event: eventName,
           statusCode: res.statusCode,
           durationMs: Number(durationMs.toFixed(2)),
         });

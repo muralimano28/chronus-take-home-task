@@ -331,4 +331,33 @@ describe("Mentor tenant isolation", () => {
             .set("Cookie", [`token=${token}`]);
         expect(invertedRes.status).toBe(400);
     });
+
+    it("prevents privilege escalation by trusting DB state over stale JWT isMentor claims", async () => {
+        const {
+            organizationA,
+            memberA,
+            userA,
+        } = await createTenantFixture();
+
+        // 1. Create a token with isMentor: true forged or stale in the JWT, but memberA in DB is isMentor: false
+        const forgedMentorToken = createTestToken({
+            membershipId: memberA.id,
+            userId: userA.id,
+            organizationId: organizationA.id,
+            isMentor: true, // ⚠️ Stale / forged claim!
+            timezone: memberA.timezone,
+            name: userA.name,
+            email: userA.email,
+            organizationName: organizationA.name,
+        });
+
+        // 2. Attempt to access mentor-only endpoint GET /mentors/me/slots
+        const response = await request(app)
+            .get("/api/v1/mentors/me/slots")
+            .set("Cookie", [`token=${forgedMentorToken}`]);
+
+        // 3. Must be rejected because the database record has isMentor: false
+        expect(response.status).toBe(403);
+        expect(response.body.error).toBe("Only mentors can access this endpoint.");
+    });
 });

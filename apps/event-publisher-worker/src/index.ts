@@ -3,9 +3,13 @@ import { prisma } from "@chronus/db";
 import { rabbitmq, MENTORING_EVENT_TOPOLOGY } from "@chronus/rabbitmq";
 import { createLogger, runWithContext } from "@chronus/logger";
 
+import { claimOutboxBatch } from "./claim";
+
 const logger = createLogger("event-publisher-worker");
 const POLL_INTERVAL_MS = env.POLL_INTERVAL_MS;
 const BATCH_SIZE = env.BATCH_SIZE;
+const VISIBILITY_TIMEOUT_SECONDS = env.VISIBILITY_TIMEOUT_SECONDS;
+const MAX_RETRIES = env.MAX_RETRIES;
 
 /**
  * Initializes and asserts durable RabbitMQ exchange, queues, and bindings upfront
@@ -22,38 +26,20 @@ async function initTopology() {
 }
 
 /**
- * Reads pending OutboxEvent records from the database and publishes them to RabbitMQ.
- * Uses PostgreSQL's FOR UPDATE SKIP LOCKED to safely support multiple concurrent worker replicas.
+ * Reads and atomically claims pending/timed-out OutboxEvent records via claimOutboxBatch.
+ * Processes each event, dispatches to RabbitMQ, and transitions the state to PUBLISHED or PENDING/FAILED.
  */
 async function processOutboxBatch(): Promise<number> {
-  // 1. Atomically claim oldest pending outbox events skipping any records locked by concurrent workers
-  const pendingEvents = await prisma.$queryRaw<
-    Array<{
-      id: string;
-      correlationId: string;
-      eventType: string;
-      aggregateId: string;
-      payload: any;
-      status: string;
-      createdAt: Date;
-      publishedAt: Date | null;
-    }>
-  >`
-    SELECT id, "correlationId", "eventType", "aggregateId", payload, status, "createdAt", "publishedAt"
-    FROM "OutboxEvent"
-    WHERE status = 'PENDING'
-    ORDER BY "createdAt" ASC
-    LIMIT ${BATCH_SIZE}
-    FOR UPDATE SKIP LOCKED
-  `;
+  // 1. Atomically claim and transition events to 'PROCESSING' with a visibility lease
+  const claimedEvents = await claimOutboxBatch(BATCH_SIZE, VISIBILITY_TIMEOUT_SECONDS);
 
-  if (pendingEvents.length === 0) {
+  if (claimedEvents.length === 0) {
     return 0;
   }
 
-  logger.info(`Claimed ${pendingEvents.length} pending outbox event(s) to publish.`);
+  logger.info(`Claimed ${claimedEvents.length} outbox event(s) with ${VISIBILITY_TIMEOUT_SECONDS}s visibility lease.`);
 
-  for (const event of pendingEvents) {
+  for (const event of claimedEvents) {
     const correlationId = event.correlationId;
 
     await runWithContext({ correlationId, eventType: event.eventType, aggregateId: event.aggregateId }, async () => {
@@ -77,24 +63,52 @@ async function processOutboxBatch(): Promise<number> {
           }
         );
 
-        // 3. Mark event as PUBLISHED in the database
+        // 3. Mark event as PUBLISHED in the database and release lease
         await prisma.outboxEvent.update({
           where: { id: event.id },
           data: {
             status: "PUBLISHED",
             publishedAt: new Date(),
+            lockedAt: null,
           },
         });
 
-        logger.info(`Published event ${event.id} (${event.eventType}) to routing key '${routingKey}'`);
+        logger.info(`Published event ${event.id} (${event.eventType}) to routing key '${routingKey}'`, {
+          event: "outbox.event_published",
+          outboxEventId: event.id,
+          routingKey,
+        });
       } catch (err) {
-        logger.error(`Failed to publish event ${event.id}:`, { error: err });
-        // Leave status as PENDING so it will be retried in subsequent poll cycles
+        const hasExceededRetries = event.retryCount >= MAX_RETRIES;
+        logger.error(`Failed to publish event ${event.id}:`, {
+          event: "outbox.publish_failed",
+          outboxEventId: event.id,
+          retryCount: event.retryCount,
+          hasExceededRetries,
+          error: err,
+        });
+
+        // Reset to PENDING for immediate retry (or FAILED if retry limit reached)
+        await prisma.outboxEvent.update({
+          where: { id: event.id },
+          data: {
+            status: hasExceededRetries ? "FAILED" : "PENDING",
+            lockedAt: null,
+          },
+        });
+
+        if (hasExceededRetries) {
+          logger.error(`Event ${event.id} marked as FAILED after ${event.retryCount} attempts.`, {
+            event: "outbox.publish_failed",
+            outboxEventId: event.id,
+            finalStatus: "FAILED",
+          });
+        }
       }
     });
   }
 
-  return pendingEvents.length;
+  return claimedEvents.length;
 }
 
 /**
@@ -110,6 +124,7 @@ async function startOutboxWorker() {
   }
 
   let isRunning = true;
+  let consecutiveErrors = 0;
 
   const shutdown = async () => {
     logger.info("Gracefully shutting down...");
@@ -125,13 +140,19 @@ async function startOutboxWorker() {
   while (isRunning) {
     try {
       const processedCount = await processOutboxBatch();
-      // If there were events processed, immediately poll for the next batch; otherwise sleep
+      consecutiveErrors = 0; // Reset error counter on healthy processing batch
+      // If there were events processed, immediately poll for the next batch; otherwise sleep base interval
       if (processedCount === 0) {
         await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
       }
     } catch (err) {
-      logger.error("Outbox worker loop error:", { error: err });
-      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      consecutiveErrors++;
+      // Full jitter exponential backoff: min(30000, base * 2^(errors - 1))
+      const maxBackoff = Math.min(30000, POLL_INTERVAL_MS * Math.pow(2, consecutiveErrors - 1));
+      const delay = Math.floor(Math.random() * maxBackoff);
+
+      logger.error(`Outbox worker loop error (failure #${consecutiveErrors}). Backing off for ${delay}ms:`, { error: err });
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 }

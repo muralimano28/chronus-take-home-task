@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as BookingsRouteImport } from './routes/bookings'
 import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as SlotsRouteImport } from './routes/slots'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -28,35 +29,44 @@ const DashboardRoute = DashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SlotsRoute = SlotsRouteImport.update({
+  id: '/slots',
+  path: '/slots',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/bookings': typeof BookingsRoute
   '/dashboard': typeof DashboardRoute
+  '/slots': typeof SlotsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/bookings': typeof BookingsRoute
   '/dashboard': typeof DashboardRoute
+  '/slots': typeof SlotsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/bookings': typeof BookingsRoute
   '/dashboard': typeof DashboardRoute
+  '/slots': typeof SlotsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/bookings' | '/dashboard'
+  fullPaths: '/' | '/bookings' | '/dashboard' | '/slots'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/bookings' | '/dashboard'
-  id: '__root__' | '/' | '/bookings' | '/dashboard'
+  to: '/' | '/bookings' | '/dashboard' | '/slots'
+  id: '__root__' | '/' | '/bookings' | '/dashboard' | '/slots'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BookingsRoute: typeof BookingsRoute
   DashboardRoute: typeof DashboardRoute
+  SlotsRoute: typeof SlotsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -82,6 +92,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/slots': {
+      id: '/slots'
+      path: '/slots'
+      fullPath: '/slots'
+      preLoaderRoute: typeof SlotsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -89,6 +106,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BookingsRoute: BookingsRoute,
   DashboardRoute: DashboardRoute,
+  SlotsRoute: SlotsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

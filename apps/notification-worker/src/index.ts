@@ -42,12 +42,29 @@ async function startNotificationWorker() {
       const correlationId = (event as any).correlationId || event.id;
 
       await runWithContext({ correlationId, eventType: event.eventType, aggregateId: event.aggregateId }, async () => {
-        logger.info(`Processing event: ${event.eventType} (ID: ${event.id})`);
+        logger.info(`Received notification event: ${event.eventType} (ID: ${event.id})`, {
+          event: "notification.received",
+          outboxEventId: event.id,
+          eventType: event.eventType,
+          aggregateId: event.aggregateId,
+        });
 
-        // Dispatch localized emails to member and mentor using self-contained payload
-        await emailService.handleBookingNotification(event);
+        try {
+          // Dispatch localized emails to member and mentor using self-contained payload
+          await emailService.handleBookingNotification(event);
 
-        logger.info(`Successfully processed and notified for event: ${event.id}`);
+          logger.info(`Successfully dispatched notification for event: ${event.id}`, {
+            event: "notification.sent",
+            outboxEventId: event.id,
+          });
+        } catch (err) {
+          logger.error(`Failed to send notification for event: ${event.id}`, {
+            event: "notification.failed",
+            outboxEventId: event.id,
+            error: err,
+          });
+          throw err; // Trigger RabbitMQ NACK / retry or DLQ routing
+        }
       });
     },
     {

@@ -27,7 +27,7 @@ app.use(
 );
 
 app.use(cookieParser());
-app.use(express.json());
+app.use(express.json({ limit: "10kb" }));
 
 // Versioned API Routes (v1)
 const v1Router = express.Router();

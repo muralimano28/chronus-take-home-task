@@ -287,3 +287,114 @@ Why: To improve developer experience and log scannability during local debugging
   - **Correlation ID**: Cyan badge `[cid:<uuid>]` for rapid visual matching across terminal streams.
   - **Context Metadata**: Dimmed JSON formatting for supplementary payloads (`{ durationMs, statusCode, url }`).
 * **Strict Production Isolation**: ANSI formatting is strictly guarded by `!isProduction`, ensuring production containers continue emitting raw JSON lines for log shippers.
+
+Decision 50 — Role-Aware Collapsible Sidebar with Shadcn UI (`@chronus/ui`)
+Why: To establish a responsive navigation experience across all authenticated portal views:
+* **Official Shadcn/ui Architecture**: Built on `@radix-ui/react-dialog`, `@radix-ui/react-tooltip`, and `@radix-ui/react-separator` inside `@chronus/ui`. Supports slim icon collapse (`collapsible="icon"`), mobile sheet drawer transition (`useIsMobile`), and persistent state with keyboard shortcuts (`Cmd+B` / `Ctrl+B`).
+* **Role-Aware Navigation**:
+  1. **Home** (`/dashboard` with `Home` icon) for mentor discovery.
+  2. **My Bookings** (`/bookings` with `CalendarCheck` icon) for booked sessions.
+  3. **My Slots** (`/slots` with `Clock` icon) rendered conditionally and accessible strictly when `user.isMentor === true`.
+* **User Profile & Logout Submenu**: Displays authenticated user avatar, name, and email at the sidebar footer. Clicking opens a dropdown menu with organization info, timezone, role badge, and a **Log Out** button with destructive styling.
+* **Unified Authenticated Layout**: Encapsulates `SidebarProvider`, `SidebarTrigger`, sticky top navbar, and content in `AuthenticatedLayout`, ensuring the sidebar is visible only after authentication while the login view remains undisturbed.
+
+Decision 51 — Organization-Wide Mentor List Caching with Client-Side Self-Booking Guard
+Why: To maximize Redis cache efficiency across organization members and eliminate cache pollution:
+* **True Organization-Wide Cache**: Previously, `GET /mentors` filtered out the caller's `membershipId` directly in the SQL query (`id: { not: membershipId }`), which caused a mentor's request to populate an incomplete organization cache missing themselves. Subsequent requests from mentees then received the incomplete list.
+* **Unified Cache Entry**: Removed caller-specific SQL filtering so Redis cache keys (`org:<orgId>:mentors:v<version>:page:<p>:limit:<l>`) represent the complete, canonical list of mentors for that organization, yielding a 100% cache hit sharing rate across all members.
+* **Client-Side Self Guard**: In `MentorsList`, the logged-in mentor's card displays a clear `You (Mentor)` badge instead of the booking action trigger, while backend booking transactions continue strictly enforcing the server-side business rule (`"Mentors cannot book their own slots"`).
+
+Decision 52 — Dedicated Mentor Schedule Management Endpoint (`GET /mentors/me/slots`)
+Why: To cleanly separate public availability discovery from private schedule and attendee management:
+* **Separation of Concerns**:
+  - `GET /mentors/:mentorId/slots`: Publicly accessible to organization mentees for booking discovery. Strictly returns `status: "AVAILABLE"` slots and is aggressively cached in Redis (15m TTL).
+  - `GET /mentors/me/slots`: Dedicated to the authenticated mentor (`/slots` view). Returns all slots (`AVAILABLE` and `BOOKED`) and securely includes attendee profile information (`member.name`, `member.email`, `member.timezone`) for active bookings.
+* **Zero Privacy Leaks**: Prevents sensitive attendee details from being cached or exposed across general organization availability queries.
+
+Decision 53 — Atomic Outbox Claim State Machine with Visibility Timeout Lease
+Why: To guarantee strictly safe, duplicate-free asynchronous event publishing across concurrent worker replicas without holding database connection locks across external network I/O:
+* **The Concurrency Flaw with Plain `SELECT ... FOR UPDATE`**: When `FOR UPDATE SKIP LOCKED` was executed outside an explicit database transaction, PostgreSQL instantly released the row-level locks upon query completion while rows were still marked `PENDING`. Concurrent worker replicas could poll and claim the identical rows before the first worker finished publishing, resulting in duplicate events and emails.
+* **Atomic CTE Claim Transition**: Replaced isolated `SELECT` queries with a single atomic PostgreSQL Common Table Expression (CTE) combining `SELECT ... FOR UPDATE SKIP LOCKED` and `UPDATE ... SET status = 'PROCESSING', lockedAt = NOW(), retryCount = retryCount + 1 ... RETURNING *`. This transitions claiming rows from `PENDING` to `PROCESSING` within a single instantaneous statement.
+* **Visibility Timeout & Crash Resilience**: Added a configurable visibility timeout lease (`VISIBILITY_TIMEOUT_SECONDS`, default 60s). If a worker crashes mid-flight during RabbitMQ dispatch, expired `PROCESSING` records automatically become visible again for re-claiming by healthy workers (`lockedAt < NOW() - INTERVAL '60 seconds'`).
+* **Bounded Retries and Dead-Letter State**: Tracks `retryCount` on every claim cycle. Failed publishing attempts either reset to `PENDING` for immediate retry or mark as `FAILED` upon reaching `MAX_RETRIES` (default 5) to prevent poisoning worker loops.
+* **Zero Database Connection Starvation**: By transitioning state inside an atomic query and immediately releasing the connection, network I/O to RabbitMQ occurs outside open database transactions, preventing Prisma/PostgreSQL connection pool exhaustion under high throughput.
+
+Decision 54 — Lock-Free Overlap Prevention via PostgreSQL GiST Exclusion Constraints
+Why: To enforce the business rule *"A member cannot have overlapping active bookings"* with 100% mathematical integrity under high concurrency without using pessimistic row locks:
+* **The Pitfall of Explicit Pessimistic Row Locks**: Acquiring pessimistic locks (`SELECT ... FOR UPDATE` on `OrganizationUser`) serialized booking creation per member, but under high load increased database connection hold times, query queueing, and connection pool starvation.
+* **The Inadequacy of Standard Unique Partial Indexes**: Standard SQL unique indexes only check equality (`=`) between scalar values, which fails to detect overlapping intervals of differing lengths/boundaries (e.g. `10:00-11:00` vs `10:30-11:00`).
+* **PostgreSQL GiST Exclusion Constraint**:
+  - Denormalized `slotStartTime` and `slotEndTime` (`TIMESTAMPTZ(3)`) directly onto the `Booking` table.
+  - Enabled the native PostgreSQL `btree_gist` extension to combine UUID equality with temporal range exclusion.
+  - Enforced the constraint:
+    ```sql
+    ALTER TABLE "Booking"
+    ADD CONSTRAINT no_overlapping_active_member_bookings
+    EXCLUDE USING gist (
+      "memberId" WITH =,
+      tstzrange("slotStartTime", "slotEndTime", '[)') WITH &&
+    )
+    WHERE (status = 'ACTIVE');
+    ```
+* **High Concurrency & Lock-Free Scaling**: PostgreSQL evaluates the GiST tree at index insertion time in $O(\log N)$. All member transactions execute fully concurrently with zero application row locks, and any concurrent race condition violating the interval overlap is rejected by the database with code `23P01` (`exclusion_violation`), cleanly returning a `409 Conflict`.
+
+Decision 55 — Synchronous Redis Cache Invalidation with Exponential Backoff Retries
+Why: To guarantee immediate cache consistency and eliminate race windows where users see stale mentor availability after booking mutations:
+* **The Risk of Unawaited Fire-and-Forget**: Calling `bumpMentorSlotsVersion()` without `await` allowed the HTTP endpoint to respond before Redis processed the version increment. If Redis experienced a network blip, the unhandled rejection was swallowed, leaving the cached availability stale (up to 15m TTL) and increasing double-booking risk.
+* **Synchronous Await with Sub-Millisecond Latency**: Because Redis `INCR` executes in-memory in $<1\text{ms}$, awaiting the version bump introduces zero perceptible latency to the caller while guaranteeing that subsequent availability queries immediately read the new cache version.
+* **Resilient Retry Policy & Structured Logging**: `bumpMentorSlotsVersion` implements exponential backoff retries ($50\text{ms}, 100\text{ms}, \dots$) and logs any final failure with structured Winston metadata (`logger.error`) rather than unmonitored `console.warn`.
+* **Universal Application**: Awaited across all booking state transitions: creation (`POST /bookings`), cancellation (`POST /bookings/:id/cancel`), and rescheduling (`POST /bookings/:id/reschedule`, invalidating both old and new mentors).
+
+Decision 56 — Turborepo Monorepo-Wide Test Pipeline Integration
+Why: To provide a single unified command (`pnpm test`) that runs all package and service test suites across the monorepo concurrently with dependency-aware caching:
+* **Turbo Pipeline Task (`turbo.json`)**: Configured the `"test"` task in `turbo.json` with topological dependency on `["^db:generate", "^build"]`.
+* **Root Script Execution (`package.json`)**: Added `"test": "turbo test"` to root `package.json`, allowing developers and CI/CD pipelines to run all integration and worker test suites (`apps/api`, `apps/event-publisher-worker`) with a single command.
+
+Decision 57 — Unified Async Context Propagation & Structured Service Logging
+Why: To ensure complete, uninterrupted distributed tracing and eliminate uncontextualized logging across all asynchronous HTTP handlers and background worker routines:
+* **AsyncLocalStorage Context Boundary**: Express requests wrap execution inside `runWithContext()` in `correlationMiddleware`, populating `correlationId`, `method`, `url`, and `ip`. `requireAuth` immediately populates authenticated identity (`organizationId`, `userId`, `membershipId`) into the active context via `setContext()`.
+* **Worker Execution Tracing**: In `apps/event-publisher-worker` and `apps/notification-worker`, message processing loops invoke `runWithContext({ correlationId, eventType, aggregateId })` so all worker logs seamlessly attach distributed trace metadata.
+* **Service Logger Replacement**: Replaced all unmonitored `console.error` calls across `apps/api` (auth middleware, auth routes, users, health, bookings, idempotency) with dedicated Winston `logger.error` using structured error objects. Winston's custom formatter automatically injects active context fields (`correlationId`, `organizationId`, `userId`, `membershipId`) into all log entries.
+
+Decision 58 — Standardized Observability & Domain Event Taxonomy
+Why: To enable high-precision metrics, log querying, and alerting in LogQL/Loki/Grafana without relying on regex parsing of log text:
+* **HTTP Lifecycle Events**: `correlationMiddleware` emits `{ event: "request.started" }` on inbound requests and `{ event: "request.completed" }` or `{ event: "request.failed" }` on response finish with latency `durationMs` and `statusCode`.
+* **Security & Tenancy**: `requireAuth` emits `{ event: "security.access_denied", reason: "..." }` when tokens are invalid or memberships are unauthenticated/cross-tenant.
+* **Booking Domain Events**: Emits `{ event: "booking.created" }`, `{ event: "booking.cancelled" }`, `{ event: "booking.rescheduled" }`, `{ event: "booking.conflict", conflictType: "..." }`, and `{ event: "booking.idempotent_retry" }`.
+* **Outbox & Notification Worker Events**: Emits `{ event: "outbox.event_published" }`, `{ event: "outbox.publish_failed" }`, `{ event: "notification.received" }`, `{ event: "notification.sent" }`, and `{ event: "notification.failed" }`.
+
+Decision 59 — Authoritative Database-Backed Identity & Role Verification
+Why: To eliminate privilege escalation and prevent stale JWT claim vulnerabilities (`isMentor`, `timezone`, `email`):
+* **No Trust in Mutable JWT Claims**: `requireAuth` uses the JWT only to extract claimed tenant/membership identifiers (`organizationId`, `membershipId`) and cryptographic signature validity.
+* **Direct Database Hydration**: Middleware queries the authoritative `OrganizationUser` record (joined with `User` and `Organization`) to construct `req.user` with current `isMentor`, `timezone`, and profile metadata directly from PostgreSQL.
+* **Strict Least Privilege**: If a user's mentor status or membership is revoked in the database, subsequent requests are immediately denied even if an unexpired JWT contains stale `isMentor: true` claims.
+
+Decision 60 — Resilient Redis Retry Strategy & Atomic Version Invalidation
+Why: To prevent race condition overwrites, synchronized retry storms, and cache stampedes while guaranteeing high availability if Redis is degraded or offline:
+* **`ioredis` Client Reconnect Strategy**: Configured `retryStrategy` on the shared `@chronus/redis` client using full-jitter exponential backoff ($\text{delay} = \text{random}(0, \min(2000, 50 \times 2^{\text{times}-1}))$) bounded to 10 attempts to eliminate infinite driver reconnection loops.
+* **Full-Jitter Cache Invalidation (`bumpMentorSlotsVersion`)**: Booking mutations (`POST /bookings`, `POST /cancel`, `POST /reschedule`) increment version keys using 3-attempt bounded backoff with full jitter ($\text{delay} = \text{random}(0, 50 \times 2^{\text{attempt}-1})$). This spreads out retry spikes uniformly across time and avoids synchronous HTTP blocking.
+* **Atomic `SET NX` (Set if Not Exists)**: `getOrInitVersion` initializes uninitialized version keys (`"1"`) using `redis.set(versionKey, "1", "NX")`. If a concurrent write/invalidation updated the version in parallel (e.g. to `"2"`), the `"1"` write is safely discarded and the helper re-reads the fresh incremented version.
+* **Fail-Open Graceful Degradation**: If Redis remains unreachable after retries, `getOrInitVersion` returns `null`, and endpoints gracefully degrade to query PostgreSQL directly rather than failing the request with a `500` error.
+* **Structured Warning Logs**: Any exhausted version lookup failures emit `logger.warn` with error context for Loki/Grafana alerting without impacting end-user availability.
+
+Decision 61 — Bounded RabbitMQ Connection Retries with Full Jitter
+Why: To prevent infinite reconnect loops and broker hammering during broker downtime or network partitions:
+* **Bounded Reconnect Attempts**: Replaced unbounded `Infinity` attempts in `RabbitMQClient` with a default bound of `10` attempts (configurable via `maxReconnectAttempts`).
+* **Full-Jitter Exponential Backoff**: Reconnect delays use $\text{delay} = \text{random}(0, \min(30000, \text{base} \times 2^{\text{attempt}-1}))$ to desynchronize worker reconnects and avoid thundering herds.
+* **Graceful Termination**: Once max reconnect attempts are exhausted, the reconnection timer stops and logs an actionable critical error.
+
+Decision 62 — Differentiated Prisma P2025 and P2002 Database Error Handling
+Why: To provide explicit, actionable HTTP error status codes and error messages rather than conflating distinct database constraint errors:
+* **P2025 (Record Not Found in Conditional Optimistic Update)**: Emits `409 Conflict` (`"Slot is no longer available or has already been booked."`) with `{ event: "booking.conflict", conflictType: "slot_already_booked" }`.
+* **P2002 (Unique Constraint Violation)**: Dynamically extracts `error.meta.target` to return `400 Bad Request` (`"A record with this <target> already exists."`) with `{ event: "booking.conflict", conflictType: "unique_constraint_violation", target }`.
+* **Client Clarity**: Enables API clients and integrators to accurately identify why an operation was rejected without ambiguity.
+
+Decision 63 — Canonical Deterministic Payload Hashing for Idempotency
+Why: To prevent false payload mismatch errors (`400 Bad Request`) caused by non-deterministic JSON key serialization orders:
+* **`canonicalStringify` Serializer**: Recursively sorts object keys before serialization so `{ slotId: "1", notes: "x" }` and `{ notes: "x", slotId: "1" }` produce identical byte strings.
+* **Deterministic SHA-256 Hashes**: Guarantees that idempotent retries across different HTTP client libraries or intermediate proxies are recognized as identical payloads regardless of JSON field ordering.
+
+Decision 64 — Full-Jitter Exponential Backoff in Outbox Polling Loop
+Why: To eliminate tight 2Hz error retry loops and log flooding when downstream infrastructure (PostgreSQL, RabbitMQ) is down:
+* **Consecutive Error Tracking**: `startOutboxWorker()` maintains a `consecutiveErrors` counter that automatically resets to `0` upon any successful batch processing.
+* **Full-Jitter Backoff**: On unhandled loop errors, backoff delay scales exponentially ($\text{delay} = \text{random}(0, \min(30000, 500 \times 2^{\text{consecutiveErrors}-1}))$) rather than static 500ms intervals, mitigating retry storms while waiting for infrastructure to recover.

@@ -7,6 +7,8 @@ async function main() {
     // Clean existing data
     // ---------------------------------------------------------------------------
     // Delete in dependency order.
+    await prisma.outboxEvent.deleteMany();
+    await prisma.idempotencyKey.deleteMany();
     await prisma.booking.deleteMany();
     await prisma.mentorSlot.deleteMany();
     await prisma.organizationUser.deleteMany();
