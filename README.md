@@ -1,5 +1,7 @@
 # Chronus — Mentoring Session Booking
 
+> 🎥 **Video Walkthrough**: A complete video explanation of the architecture, design choices, and live implementation is available on [Google Drive](https://drive.google.com/file/d/19sYhahBcvpw7-arC4WmTHcm9E7A85WOc/view?usp=sharing).
+
 ## Overview
 
 This repository implements a vertically integrated slice of a multi-tenant mentoring booking platform. Members discover mentors across organizations, view availability localized to their timezones, and book, cancel, or reschedule sessions.
@@ -190,6 +192,7 @@ pnpm --filter event-publisher-worker test
 The platform architecture is guided by 68 documented decisions in [`PLAN.md`](PLAN.md).
 
 For deep-dive technical reviews, trade-off evaluations, and systems design specifications, consult the companion documents:
+- **[Video Walkthrough](https://drive.google.com/file/d/19sYhahBcvpw7-arC4WmTHcm9E7A85WOc/view?usp=sharing)** — Complete video explanation covering architecture guarantees, concurrency controls, and live implementation demo.
 - **[`docs/architecture.md`](docs/architecture.md)** — Detailed technical architecture and systems design document (system context, component responsibilities, data models, concurrency control, idempotency state machine, Redis cache-aside versioning, transactional outbox, and failure recovery matrices).
 - **[`docs/engineering-decisions.md`](docs/engineering-decisions.md)** — Tech Lead engineering decision records (ADRs) evaluating alternatives, trade-offs, and empirical test evidence across 12 core architectural challenges.
 - **[`docs/tests.md`](docs/tests.md)** — Comprehensive test reference catalog indexing all 48 integration tests with code line references and single-test execution commands.
