@@ -17,7 +17,7 @@ Rather than building a broad CRUD surface, the engineering effort is concentrate
 
 ## Features
 
-- **Multi-Tenant Session & Role Switcher**: Instant switching between organizations and user roles (Mentee / Mentor) via header controls for seamless evaluation.
+- **Multi-Tenant Account & Role Selection**: Seamless login and switching between organizations and user roles (Mentee vs. Mentor) via the landing page account selector, with sidebar user profile and session management.
 - **Mentor Discovery**: Paginated directory displaying mentor profiles, contact details, and configured timezone badges.
 - **Timezone-Aware Availability Browsing**: Slot availability view with predefined range filters (`today`, `next_7_days`, `next_30_days`, `this_month`) or custom date bounds, presenting times in both the viewer's local browser timezone and the mentor's organization timezone.
 - **Atomic 1:1 Booking**: Time-slot reservation with client-generated idempotency keys (`crypto.randomUUID()`) and standard HTTP `Idempotency-Key` header coordination.
@@ -239,7 +239,7 @@ AI tools were leveraged as a pair-programming partner to generate initial scaffo
 
 ### Implemented
 - Complete vertical slice of the mentee booking lifecycle: Discovery, Booking, Cancellation, Rescheduling.
-- Multi-tenancy isolation with an organization/user switcher for evaluation.
+- Multi-tenancy isolation with an interactive organization/user account selector for evaluation.
 - Database-enforced concurrency and interval exclusion constraints.
 - Transactional Outbox pattern with asynchronous RabbitMQ background workers.
 - Version-keyed cache-aside with atomic version invalidation.

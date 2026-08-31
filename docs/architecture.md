@@ -582,7 +582,7 @@ All Dockerfiles utilize `turbo prune` to generate minimal dependency slices:
 
 | Design Choice | Rationale | Production Evolution |
 | :--- | :--- | :--- |
-| **Header-Based User Switcher vs. Full OAuth/SSO** | Provides instant evaluation of multi-tenant roles without requiring third-party authentication credentials or email verifications. | Integrate Auth0, Okta, or Keycloak OIDC providers. |
+| **Landing Page User Selector vs. Full OAuth/SSO** | Provides instant evaluation of multi-tenant roles without requiring third-party authentication credentials or email verifications. | Integrate Auth0, Okta, or Keycloak OIDC providers. |
 | **Console Email Transport vs. SMTP/SES** | Avoids external network dependencies and API keys during local Docker Compose evaluation. | Plug in AWS SES, SendGrid, or Resend drivers into `EmailService`. |
 | **Simulated Mentor Slots vs. Full Availability Management CRUD** | Concentrated implementation bandwidth on mentee booking safety, double-booking contention, and reschedule correctness. | Build mentor recurring rule engines and calendar sync (Google/Outlook Calendar). |
 | **PostgreSQL Outbox Polling vs. CDC (Debezium)** | Native `SKIP LOCKED` polling avoids heavyweight Kafka and Kafka Connect infrastructure for current throughput. | Adopt Debezium CDC for sub-millisecond outbox streaming at high scale. |

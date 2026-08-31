@@ -416,7 +416,7 @@ Implemented a **Turborepo Monorepo** with discrete packages:
 
 | Feature Area | What Was Chosen | Stated Engineering Rationale |
 | :--- | :--- | :--- |
-| **Authentication** | Header-based multi-tenant user switcher with signed JWT session cookies. | Focused development effort on concurrency safety and transactional correctness rather than OAuth/SAML integration. |
+| **Authentication** | Interactive multi-tenant account selector with signed JWT session cookies. | Focused development effort on concurrency safety and transactional correctness rather than OAuth/SAML integration. |
 | **User / Org Onboarding** | Pre-seeded multi-tenant fixtures (`pnpm db:seed`). | Satisfies multi-tenant evaluation requirements while avoiding superficial CRUD surface. |
 | **Mentor Availability UI** | Seeded slots across mentors and global timezones. | Concentrated full bandwidth on mentee booking safety, double-booking contention, and reschedule correctness. |
 | **Email Transport** | Structured console logging inside `notification-worker`. | Avoids external API dependencies and API keys while proving the end-to-end asynchronous messaging pipeline. |
