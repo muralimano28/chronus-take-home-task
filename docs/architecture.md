@@ -243,29 +243,29 @@ sequenceDiagram
     participant Redis as Redis Cache
 
     Member->>API: POST /api/v1/bookings (Idempotency-Key: UUID, slotId)
-    API->>API: requireAuth (Verify JWT & Fetch DB OrganizationUser)
-    API->>Idemp: runIdempotent(orgId, memberId, "create_booking", key, payload)
+    API->>API: requireAuth (Verify JWT and Fetch DB OrganizationUser)
+    API->>Idemp: runIdempotent(orgId, memberId, action, key, payload)
     
     alt Idempotency Record Exists (COMPLETED)
         Idemp-->>API: Return Cached Response Body (x-idempotent-replayed: true)
         API-->>Member: 201 Created (Cached Replay)
     else Key In Progress (STARTED within 30s)
-        Idemp-->>API: Throw 409 Conflict ("Request in progress")
+        Idemp-->>API: Throw 409 Conflict (Request in progress)
         API-->>Member: 409 Conflict
     else New Key or Expired Lease
-        Idemp->>DB: Insert/Reclaim IdempotencyKey (status: STARTED, lockedAt: NOW)
+        Idemp->>DB: Insert or Reclaim IdempotencyKey (status: STARTED, lockedAt: NOW)
         
         rect rgb(240, 248, 255)
-            note over API,DB: Begin ACID Transaction (prisma.$transaction)
+            Note over API,DB: Begin ACID Transaction (prisma.$transaction)
             API->>DB: SELECT MentorSlot (where: id, organizationId)
             API->>API: Validate slot is in future (startTime >= NOW)
             API->>API: Validate mentor != member (no self-booking)
             API->>DB: UPDATE MentorSlot SET status = 'BOOKED' WHERE status = 'AVAILABLE'
             API->>DB: INSERT Booking (status: ACTIVE, slotStartTime, slotEndTime)
-            note over DB: GiST Constraint Evaluates Overlaps
+            Note over DB: GiST Constraint Evaluates Overlaps
             API->>DB: INSERT OutboxEvent (status: PENDING, correlationId, payload)
             API->>DB: UPDATE IdempotencyKey (status: COMPLETED, lockedAt: token)
-            note over API,DB: Commit Transaction
+            Note over API,DB: Commit Transaction
         end
 
         API-)Redis: bumpMentorSlotsVersion(orgId, mentorId) [Post-Commit async]
@@ -289,16 +289,16 @@ sequenceDiagram
     M1->>DB: BEGIN TX 1
     M2->>DB: BEGIN TX 2
     M1->>DB: UPDATE MentorSlot SET status = 'BOOKED' WHERE id = 'S1' AND status = 'AVAILABLE'
-    note over DB: TX 1 acquires row lock on S1; rows updated = 1
+    Note over DB: TX 1 acquires row lock on S1 (rows updated = 1)
     M2->>DB: UPDATE MentorSlot SET status = 'BOOKED' WHERE id = 'S1' AND status = 'AVAILABLE'
-    note over DB: TX 2 blocks waiting for TX 1 lock...
-    M1->>DB: INSERT Booking & OutboxEvent
+    Note over DB: TX 2 blocks waiting for TX 1 lock...
+    M1->>DB: INSERT Booking and OutboxEvent
     M1->>DB: COMMIT TX 1 (S1 is now BOOKED)
-    note over DB: TX 2 unblocks; evaluates WHERE status = 'AVAILABLE'; rows updated = 0
-    note over DB: Prisma throws P2025 (RecordNotFound)
+    Note over DB: TX 2 unblocks, evaluates WHERE status = 'AVAILABLE' (rows updated = 0)
+    Note over DB: Prisma throws P2025 (RecordNotFound)
     M2->>DB: ROLLBACK TX 2
     DB-->>M1: 201 Created (Success)
-    DB-->>M2: 409 Conflict ("Slot is no longer available")
+    DB-->>M2: 409 Conflict (Slot is no longer available)
 ```
 
 ### 6.2 Concurrent Member Overlap (Anti-TOCTOU)

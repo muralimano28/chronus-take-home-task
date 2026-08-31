@@ -15,7 +15,7 @@ Technical decision log and architectural rationale for the Chronus Multi-Tenant 
 | **5** | **Dual-Write Consistency** | Broker downtime or API crashes losing notification events after DB commit. | Transactional Outbox pattern with `FOR UPDATE SKIP LOCKED` batch polling. | Adds asynchronous polling latency (~2s) between database commit and message broker dispatch. |
 | **6** | **Messaging Reliability** | Asynchronous notification delivery and worker crash recovery. | RabbitMQ durable topic exchange with manual consumer acknowledgments (`autoAck: false`) and DLQ. | At-least-once delivery model: worker crash post-dispatch before ACK can result in duplicate emails. |
 | **7** | **Availability Caching** | High read volume on mentor availability vs. low mutation volume. | Version-keyed cache-aside in Redis with atomic `INCR` version bumps and fail-open DB fallback. | Fails open to PostgreSQL if Redis is down; transient version bump failure during mutation can serve stale cache until 15m TTL expires. |
-| **8** | **Timezones & DST** | Multi-region scheduling and Daylight Saving Time shifts. | UTC `TIMESTAMPTZ(3)` database storage with dynamic IANA timezone presentation (`date-fns-tz`). | All clients and notification workers must parse and format localized times on demand. |
+| **8** | **Timezones & DST** | Multi-region scheduling and Daylight Saving Time shifts. | UTC `TIMESTAMPTZ(3)` database storage with dynamic IANA timezone presentation (`Intl.DateTimeFormat`). | All clients and notification workers must parse and format localized times on demand. |
 | **9** | **Authorization State** | Stale JWT claims causing privilege escalation if roles change mid-session. | Database-backed hydration of mutable user state (`isMentor`) from `OrganizationUser` on every request. | Incurs one indexed `findUnique` query per authenticated HTTP request. |
 | **10**| **Rescheduling Safety** | Concurrent reschedules orphaning newly reserved slots as permanently `BOOKED`. | Atomic transaction asserting `slotId: booking.slotId` and old slot `status: "BOOKED"`. | Conflicting concurrent reschedules fail atomically and roll back all slot reservations. |
 | **11**| **System Boundaries** | Organizing code for reuse and independent deployment without microservice overhead. | Turborepo monorepo with discrete packages and separate background worker processes. | Shared packages require internal TypeScript compilation pipelines during builds. |
@@ -53,9 +53,9 @@ Adopted a two-layered database defense:
 - The second concurrent request fails immediately rather than queuing. This is the desired behavior for interactive booking APIs—users prefer an instant "Slot no longer available" response over prolonged blocking.
 
 ### Evidence
-- **Schema & Migration**: [`packages/db/prisma/schema.prisma:106`](file:///Users/mano/workspace/chronus-take-home-task/packages/db/prisma/schema.prisma#L106), [`packages/db/prisma/migrations/20260828113750_init_db_setup/migration.sql:84`](file:///Users/mano/workspace/chronus-take-home-task/packages/db/prisma/migrations/20260828113750_init_db_setup/migration.sql#L84).
-- **Implementation**: [`apps/api/src/routes/bookings.ts:197-206`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/src/routes/bookings.ts#L197-L206).
-- **Automated Test**: `"allows only one user to book a slot concurrently"` in [`apps/api/tests/integration/bookings.test.ts:11-66`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/tests/integration/bookings.test.ts#L11-L66).
+- **Schema & Migration**: [`packages/db/prisma/schema.prisma#L106`](../packages/db/prisma/schema.prisma#L106), [`packages/db/prisma/migrations/20260828113750_init_db_setup/migration.sql#L104`](../packages/db/prisma/migrations/20260828113750_init_db_setup/migration.sql#L104).
+- **Implementation**: [`apps/api/src/routes/bookings.ts#L197`](../apps/api/src/routes/bookings.ts#L197).
+- **Automated Test**: `"allows only one user to book a slot concurrently"` in [`apps/api/tests/integration/bookings.test.ts#L11`](../apps/api/tests/integration/bookings.test.ts#L11).
 - **Plan Reference**: Decisions 2, 18, 20.
 
 ---
@@ -108,9 +108,9 @@ EXCLUDE USING gist (
 - Requires the PostgreSQL `btree_gist` extension. Error codes (`23P01`, `P2034`, `40P01`, `40001`) must be intercepted in the API error handler and mapped to `409 Conflict`.
 
 ### Evidence
-- **Migration**: [`packages/db/prisma/migrations/20260830112621_add_booking_times_and_exclusion_constraint/migration.sql:1-14`](file:///Users/mano/workspace/chronus-take-home-task/packages/db/prisma/migrations/20260830112621_add_booking_times_and_exclusion_constraint/migration.sql#L1-L14).
-- **Implementation**: [`apps/api/src/routes/bookings.ts:296-310`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/src/routes/bookings.ts#L296-L310).
-- **Automated Test**: `"prevents concurrent member overlap race condition (TOCTOU)..."` in [`apps/api/tests/integration/bookings.test.ts:114-171`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/tests/integration/bookings.test.ts#L114-L171).
+- **Migration**: [`packages/db/prisma/migrations/20260830112621_add_booking_times_and_exclusion_constraint/migration.sql#L26`](../packages/db/prisma/migrations/20260830112621_add_booking_times_and_exclusion_constraint/migration.sql#L26).
+- **Implementation**: [`apps/api/src/routes/bookings.ts#L296`](../apps/api/src/routes/bookings.ts#L296).
+- **Automated Test**: `"prevents concurrent member overlap race condition (TOCTOU)..."` in [`apps/api/tests/integration/bookings.test.ts#L89`](../apps/api/tests/integration/bookings.test.ts#L89).
 - **Plan Reference**: Decisions 23, 54.
 
 ---
@@ -153,9 +153,9 @@ Added membershipId foreign key and scoped composite uniqueness to:
 - Requires storing `responseBody` JSON in PostgreSQL `IdempotencyKey` table until TTL expiration.
 
 ### Evidence
-- **Migration**: [`packages/db/prisma/migrations/20260830220300_scope_idempotency_by_member/migration.sql`](file:///Users/mano/workspace/chronus-take-home-task/packages/db/prisma/migrations/20260830220300_scope_idempotency_by_member/migration.sql).
-- **Implementation**: [`apps/api/src/services/idempotency.ts:23-35, 78-102`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/src/services/idempotency.ts#L23-L35).
-- **Automated Test**: `"prevents cross-user idempotency key collisions and private data leakage"` in [`apps/api/tests/integration/bookings.test.ts:278-325`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/tests/integration/bookings.test.ts#L278-L325).
+- **Migration**: [`packages/db/prisma/migrations/20260830220300_scope_idempotency_by_member/migration.sql#L1`](../packages/db/prisma/migrations/20260830220300_scope_idempotency_by_member/migration.sql#L1).
+- **Implementation**: [`apps/api/src/services/idempotency.ts#L24`](../apps/api/src/services/idempotency.ts#L24), [`apps/api/src/services/idempotency.ts#L78`](../apps/api/src/services/idempotency.ts#L78).
+- **Automated Test**: `"prevents cross-user idempotency key collisions and private data leakage"` in [`apps/api/tests/integration/bookings.test.ts#L278`](../apps/api/tests/integration/bookings.test.ts#L278).
 - **Plan Reference**: Decisions 3, 24, 63, 68.
 
 ---
@@ -193,8 +193,8 @@ A simple state machine (`STARTED -> COMPLETED`) fails when requests crash or exp
 - A client whose request takes longer than 30 seconds to execute will have its lease reclaimed. 30 seconds is more than sufficient for OLTP booking transactions.
 
 ### Evidence
-- **Implementation**: [`apps/api/src/services/idempotency.ts:104-165`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/src/services/idempotency.ts#L104-L165).
-- **Automated Tests**: `"reclaims an idempotency key lock if the lease window has expired"` and `"safely handles concurrent retries racing to reclaim a FAILED idempotency key"` in [`apps/api/tests/integration/bookings.test.ts:390-590`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/tests/integration/bookings.test.ts#L390-L590).
+- **Implementation**: [`apps/api/src/services/idempotency.ts#L107`](../apps/api/src/services/idempotency.ts#L107).
+- **Automated Tests**: `"reclaims an idempotency key lock if the lease window has expired"` in [`apps/api/tests/integration/bookings.test.ts#L386`](../apps/api/tests/integration/bookings.test.ts#L386) and `"safely handles concurrent retries racing to reclaim a FAILED idempotency key"` in [`apps/api/tests/integration/bookings.test.ts#L503`](../apps/api/tests/integration/bookings.test.ts#L503).
 - **Plan Reference**: Decision 67.
 
 ---
@@ -236,8 +236,8 @@ Implemented the **Transactional Outbox Pattern**:
 - **What is NOT guaranteed**: Sub-millisecond notification delivery (adds ~2s polling interval latency).
 
 ### Evidence
-- **Implementation**: [`apps/api/src/routes/bookings.ts:250-264`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/src/routes/bookings.ts#L250-L264), [`apps/event-publisher-worker/src/claim.ts:26-55`](file:///Users/mano/workspace/chronus-take-home-task/apps/event-publisher-worker/src/claim.ts#L26-L55).
-- **Automated Tests**: [`apps/event-publisher-worker/tests/outbox.test.ts`](file:///Users/mano/workspace/chronus-take-home-task/apps/event-publisher-worker/tests/outbox.test.ts).
+- **Implementation**: [`apps/api/src/routes/bookings.ts#L250`](../apps/api/src/routes/bookings.ts#L250), [`apps/event-publisher-worker/src/claim.ts#L22`](../apps/event-publisher-worker/src/claim.ts#L22).
+- **Automated Tests**: [`apps/event-publisher-worker/tests/outbox.test.ts#L8`](../apps/event-publisher-worker/tests/outbox.test.ts#L8).
 - **Plan Reference**: Decisions 38, 41, 47, 53.
 
 ---
@@ -261,8 +261,8 @@ Notification consumers must process booking events, format localized date/time s
 - **At-Least-Once Delivery Trade-off**: If a consumer crashes *after* sending an email but *before* acknowledging the message to RabbitMQ, the message will be redelivered, potentially sending a duplicate email. This trade-off is consciously accepted over dropped notifications.
 
 ### Evidence
-- **Topology**: [`packages/rabbitmq/src/index.ts:28-33, 175-215`](file:///Users/mano/workspace/chronus-take-home-task/packages/rabbitmq/src/index.ts#L28-L33).
-- **Consumer Implementation**: [`apps/notification-worker/src/index.ts:39-74`](file:///Users/mano/workspace/chronus-take-home-task/apps/notification-worker/src/index.ts#L39-L74), [`apps/notification-worker/src/services/email.service.ts:70-184`](file:///Users/mano/workspace/chronus-take-home-task/apps/notification-worker/src/services/email.service.ts#L70-L184).
+- **Topology**: [`packages/rabbitmq/src/index.ts#L28`](../packages/rabbitmq/src/index.ts#L28).
+- **Consumer Implementation**: [`apps/notification-worker/src/index.ts#L39`](../apps/notification-worker/src/index.ts#L39), [`apps/notification-worker/src/services/email.service.ts#L70`](../apps/notification-worker/src/services/email.service.ts#L70).
 - **Plan Reference**: Decisions 7, 39, 40, 45, 61.
 
 ---
@@ -288,8 +288,8 @@ Implemented **Version-Keyed Cache-Aside**:
 - **Transient Version Bump Failure on Mutation**: If Redis is temporarily unreachable during the post-commit `bumpMentorSlotsVersion` call, the version is not incremented. Subsequent reads when Redis recovers can serve the prior version's cached payload for the remainder of its 15-minute TTL. However, PostgreSQL constraints guarantee that double-booking remains strictly rejected (409 Conflict).
 
 ### Evidence
-- **Implementation**: [`apps/api/src/routes/mentors.ts:19-54, 330-347`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/src/routes/mentors.ts#L19-L54), [`apps/api/src/routes/bookings.ts:20-42`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/src/routes/bookings.ts#L20-L42).
-- **Automated Test**: [`apps/api/tests/integration/cache.test.ts`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/tests/integration/cache.test.ts).
+- **Implementation**: [`apps/api/src/routes/mentors.ts#L22`](../apps/api/src/routes/mentors.ts#L22), [`apps/api/src/routes/bookings.ts#L20`](../apps/api/src/routes/bookings.ts#L20).
+- **Automated Test**: [`apps/api/tests/integration/cache.test.ts#L19`](../apps/api/tests/integration/cache.test.ts#L19).
 - **Plan Reference**: Decisions 6, 36, 37, 51, 55, 60.
 
 ---
@@ -301,15 +301,15 @@ Mentors and members collaborate across different global timezones (e.g., America
 
 ### Decision
 1. **Single Source of Truth**: All slot and booking start/end times are stored strictly in UTC using PostgreSQL `TIMESTAMPTZ(3)`.
-2. **Boundary Formatting**: Timezone conversion is treated strictly as a presentation-layer concern. The API and notification workers format times on demand using IANA timezone identifiers via `date-fns-tz` (`formatDateInTimezone`, `formatTimeRangeInTimezone`).
+2. **Boundary Formatting**: Timezone conversion is treated strictly as a presentation-layer concern. The API and notification workers format times on demand using IANA timezone identifiers via native `Intl.DateTimeFormat` (`formatDateInTimezone`, `formatTimeRangeInTimezone`).
 
 ### Why
 - **Mathematical Continuity**: Storing UTC eliminates discontinuous jumps during DST shifts.
 - **Cross-Timezone Interval Evaluation**: PostgreSQL GiST interval constraints operate accurately in UTC regardless of the viewer's local timezone.
 
 ### Evidence
-- **Implementation**: [`packages/utils/src/timezone.ts:1-45`](file:///Users/mano/workspace/chronus-take-home-task/packages/utils/src/timezone.ts#L1-L45).
-- **Automated Tests**: [`apps/api/tests/integration/timezone.test.ts:1-215`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/tests/integration/timezone.test.ts#L1-L215) verifying US (`EST` $\leftrightarrow$ `EDT`) and UK (`GMT` $\leftrightarrow$ `BST`) transition boundaries.
+- **Implementation**: [`packages/utils/src/index.ts#L5`](../packages/utils/src/index.ts#L5).
+- **Automated Tests**: [`apps/api/tests/integration/timezone.test.ts#L10`](../apps/api/tests/integration/timezone.test.ts#L10) verifying US (`EST` $\leftrightarrow$ `EDT`) and UK (`GMT` $\leftrightarrow$ `BST`) transition boundaries.
 - **Plan Reference**: Decisions 4, 16, 40.
 
 ---
@@ -347,8 +347,8 @@ then queries OrganizationUser in PostgreSQL to hydrate mutable roles (isMentor, 
 - This adds one indexed lookup per authenticated request, but keeps mutable authorization state authoritative in PostgreSQL and avoids JWT revocation infrastructure.
 
 ### Evidence
-- **Implementation**: [`apps/api/src/middleware/auth.ts:60-108`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/src/middleware/auth.ts#L60-L108), [`apps/api/src/middleware/tenant.ts:13-37`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/src/middleware/tenant.ts#L13-L37).
-- **Automated Test**: `"prevents privilege escalation by trusting DB state over stale JWT isMentor claims"` in [`apps/api/tests/integration/mentors.test.ts:190-245`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/tests/integration/mentors.test.ts#L190-L245).
+- **Implementation**: [`apps/api/src/middleware/auth.ts#L61`](../apps/api/src/middleware/auth.ts#L61), [`apps/api/src/middleware/tenant.ts#L13`](../apps/api/src/middleware/tenant.ts#L13).
+- **Automated Test**: `"prevents privilege escalation by trusting DB state over stale JWT isMentor claims"` in [`apps/api/tests/integration/mentors.test.ts#L335`](../apps/api/tests/integration/mentors.test.ts#L335).
 - **Plan Reference**: Decisions 13, 14, 15, 17, 22, 59.
 
 ---
@@ -385,8 +385,8 @@ Executed rescheduling inside an atomic `prisma.$transaction`:
 - **Identity Preservation**: The original `Booking.id` is preserved across reschedules for historical auditability.
 
 ### Evidence
-- **Implementation**: [`apps/api/src/routes/bookings.ts:554-830`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/src/routes/bookings.ts#L554-L830).
-- **Automated Tests**: `"prevents concurrent reschedule requests from orphaning slots"` in [`apps/api/tests/integration/bookings.test.ts:1407-1475`](file:///Users/mano/workspace/chronus-take-home-task/apps/api/tests/integration/bookings.test.ts#L1407-L1475).
+- **Implementation**: [`apps/api/src/routes/bookings.ts#L554`](../apps/api/src/routes/bookings.ts#L554).
+- **Automated Tests**: `"prevents concurrent reschedule requests from orphaning slots"` in [`apps/api/tests/integration/bookings.test.ts#L1407`](../apps/api/tests/integration/bookings.test.ts#L1407).
 - **Plan Reference**: Decisions 26, 27, 65, 66.
 
 ---
@@ -407,7 +407,7 @@ Implemented a **Turborepo Monorepo** with discrete packages:
 - **Optimized Docker Builds**: Dockerfiles utilize `turbo prune` to build minimal, highly cached Alpine runner images.
 
 ### Evidence
-- **Monorepo Config**: [`turbo.json`](file:///Users/mano/workspace/chronus-take-home-task/turbo.json), [`docker-compose.yml`](file:///Users/mano/workspace/chronus-take-home-task/docker-compose.yml).
+- **Monorepo Config**: [`turbo.json#L1`](../turbo.json#L1), [`docker-compose.yml#L1`](../docker-compose.yml#L1).
 - **Plan Reference**: Decisions 9, 10, 11, 12, 42, 43, 56.
 
 ---

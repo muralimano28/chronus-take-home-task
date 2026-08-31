@@ -74,7 +74,7 @@ flowchart TD
 - **`packages/redis`**: Shared `ioredis` client with full-jitter exponential backoff retry strategies.
 - **`packages/rabbitmq`**: Shared `amqplib` wrapper managing topology assertions (exchange, queue, dead-letter exchange, routing keys) and connection lifecycles.
 - **`packages/logger`**: Winston logger with `AsyncLocalStorage` context propagation (`correlationId`, `organizationId`, `userId`, `membershipId`) and structured domain event taxonomy.
-- **`packages/utils`**: Date and time formatting helpers (`formatDateInTimezone`, `formatTimeInTimezone`, `formatTimeRangeInTimezone`) using `date-fns-tz`.
+- **`packages/utils`**: Date and time formatting helpers (`formatDateInTimezone`, `formatTimeInTimezone`, `formatTimeRangeInTimezone`) using native `Intl.DateTimeFormat`.
 - **`packages/ui`**: Shared UI component library built on TailwindCSS, Radix UI primitives, and Lucide icons.
 
 ---
@@ -91,7 +91,7 @@ flowchart TD
 | **Per-Member Key Isolation** | Composite unique constraint `@@unique([organizationId, membershipId, action, idempotencyKey])`. Prevents cross-member key collision and PII leakage. | `bookings.test.ts` (`"prevents cross-user idempotency key collisions and private data leakage"`) |
 | **Multi-Tenancy** | Every database query explicitly filters on `organizationId`. `requireAuth` re-verifies active `OrganizationUser` database records on every request, hydrating mutable roles (`isMentor`) from the database rather than stale JWT claims. | `tenancy.test.ts` & `mentors.test.ts` (`"Organization A cannot see Organization B bookings"`) |
 | **Rescheduling Safety** | Atomic transaction: reserves new slot, frees old slot only if `status == "BOOKED"`, and updates booking asserting `where: { slotId: booking.slotId, status: "ACTIVE" }`. Prevents concurrent reschedule races from orphaning slots. | `bookings.test.ts` (`"prevents concurrent reschedule requests from orphaning slots"`) |
-| **Timezone & DST Normalization** | All timestamps stored in UTC using `TIMESTAMPTZ(3)`. Dynamic formatting via IANA timezones (`date-fns-tz`), verified across US and UK Daylight Saving Time boundaries. | `timezone.test.ts` (`"handles UK DST transition (GMT <-> BST)..."`) |
+| **Timezone & DST Normalization** | All timestamps stored in UTC using `TIMESTAMPTZ(3)`. Dynamic formatting via IANA timezones (`Intl.DateTimeFormat`), verified across US and UK Daylight Saving Time boundaries. | `timezone.test.ts` (`"handles UK DST transition (GMT <-> BST)..."`) |
 | **Transactional Notifications** | Atomic insertion of `OutboxEvent` (`status: "PENDING"`) in the same database transaction as the booking state change, eliminating dual-write inconsistency. | `outbox.test.ts` (`"claims a batch of pending events and locks them"`) |
 | **Asynchronous Delivery** | At-least-once delivery pipeline: PostgreSQL Outbox $\rightarrow$ Event Publisher (`FOR UPDATE SKIP LOCKED`) $\rightarrow$ RabbitMQ $\rightarrow$ Notification Worker (`autoAck: false` with manual acknowledgments and DLQ routing). | `apps/event-publisher-worker/tests/outbox.test.ts` |
 | **Cache Consistency** | Version-keyed Redis cache (`org:...:slots:version`). Booking mutations atomically increment (`INCR`) the version with full-jitter exponential backoff, failing open to PostgreSQL on cache partitions. | `cache.test.ts` (`"invalidates cache on new booking"`) |
@@ -159,6 +159,8 @@ pnpm dev
 
 The automated test suite runs against real PostgreSQL and Redis instances. The test harness executes `prisma migrate deploy` in `global-setup.ts` to ensure raw SQL migrations (including PostgreSQL `btree_gist` extensions and exclusion constraints) are active during testing.
 
+> 📖 **Comprehensive Test Catalog**: For an itemized catalog of all 48 integration test cases with direct code line links and single-test execution commands, see **[`docs/tests.md`](docs/tests.md)**.
+
 ```bash
 # Run all integration tests across the monorepo
 pnpm test
@@ -185,12 +187,13 @@ pnpm --filter event-publisher-worker test
 
 ## Key Engineering Decisions
 
-The platform architecture is guided by 68 documented decisions in [`PLAN.md`](file:///Users/mano/workspace/chronus-take-home-task/PLAN.md).
+The platform architecture is guided by 68 documented decisions in [`PLAN.md`](PLAN.md).
 
 For deep-dive technical reviews, trade-off evaluations, and systems design specifications, consult the companion documents:
-- **[`docs/architecture.md`](file:///Users/mano/workspace/chronus-take-home-task/docs/architecture.md)** — Detailed technical architecture and systems design document (system context, component responsibilities, data models, concurrency control, idempotency state machine, Redis cache-aside versioning, transactional outbox, and failure recovery matrices).
-- **[`docs/engineering-decisions.md`](file:///Users/mano/workspace/chronus-take-home-task/docs/engineering-decisions.md)** — Tech Lead engineering decision records (ADRs) evaluating alternatives, trade-offs, and empirical test evidence across 12 core architectural challenges.
-- **[`PLAN.md`](file:///Users/mano/workspace/chronus-take-home-task/PLAN.md)** — Complete chronological design log documenting all 68 architectural choices and evolution milestones.
+- **[`docs/architecture.md`](docs/architecture.md)** — Detailed technical architecture and systems design document (system context, component responsibilities, data models, concurrency control, idempotency state machine, Redis cache-aside versioning, transactional outbox, and failure recovery matrices).
+- **[`docs/engineering-decisions.md`](docs/engineering-decisions.md)** — Tech Lead engineering decision records (ADRs) evaluating alternatives, trade-offs, and empirical test evidence across 12 core architectural challenges.
+- **[`docs/tests.md`](docs/tests.md)** — Comprehensive test reference catalog indexing all 48 integration tests with code line references and single-test execution commands.
+- **[`PLAN.md`](PLAN.md)** — Complete chronological design log documenting all 68 architectural choices and evolution milestones.
 
 Below are the 10 core architectural decision groups:
 

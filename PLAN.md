@@ -169,7 +169,7 @@ Why: To provide reliable asynchronous messaging between our API outbox publisher
 
 Decision 40 — Event-Driven Email Notification Worker Service (`apps/notification-worker`)
 Why: Mentoring session lifecycle events (`BOOKING_CREATED`, `BOOKING_CANCELLED`, `BOOKING_RESCHEDULED`) require transactional email notifications to both the member and mentor without degrading HTTP response latency or burdening the primary database.
-* **Worker Isolation**: Implemented a standalone consumer worker [`apps/notification-worker`](file:///Users/mano/workspace/chronus-take-home-task/apps/notification-worker) decoupled from the web and API servers.
+* **Worker Isolation**: Implemented a standalone consumer worker [`apps/notification-worker`](apps/notification-worker) decoupled from the web and API servers.
 * **Zero-DB Payload Strategy**: The worker relies entirely on the self-contained event payload published through RabbitMQ without issuing secondary database read queries.
 * **Dual-Timezone Localization**: Uses pure date utilities from `@chronus/utils` (`formatDateInTimezone`, `formatTimeRangeInTimezone`) to format appointment dates and times localized to the member's and mentor's individual configured timezones (e.g. `America/New_York` vs `Asia/Kolkata`).
 * **Reliable Acknowledgment**: Consumer operates with `autoAck: false` (manual acknowledgment) and `prefetch: 10`. Messages are acknowledged (`ch.ack`) strictly after successful email delivery; uncaught exceptions trigger `nack(msg, false, false)` to route poisoned messages to the Dead Letter Queue (`notification.email.queue.dlq`).
